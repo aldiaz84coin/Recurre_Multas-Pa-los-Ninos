@@ -17,7 +17,8 @@ export async function POST(req: NextRequest) {
 
     // ── Gemini ────────────────────────────────────────────────────────────────
     if (provider === "gemini") {
-      const m = model || "gemini-1.5-flash";
+      //const m = model || "gemini-1.5-flash";
+      const m = model || "gemini-2.5-flash";
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${apiKey}`;
       const res = await fetch(url, {
         method: "POST",
