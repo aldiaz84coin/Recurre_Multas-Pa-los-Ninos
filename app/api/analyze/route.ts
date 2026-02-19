@@ -1,14 +1,13 @@
 /**
  * app/api/analyze/route.ts
  *
- * FASE 1 — Parseo visual con Mistral Pixtral 12B (MISTRAL_API_KEY)
- *   · Soporta imágenes y PDFs con visión nativa
- *   · Free tier en La Plateforme (console.mistral.ai)
- *   · Extrae todos los datos de la multa como texto estructurado
+ * FASE 1 — Parseo visual con Qwen2.5-VL-72B vía OpenRouter (OPENROUTER_API_KEY)
+ *   · Modelo especializado en OCR y document parsing, completamente gratuito
+ *   · Soporta imágenes y PDFs escaneados con visión nativa
+ *   · Una sola key hace el parseo Y uno de los 3 agentes
  *
- * FASE 2 — 3 agentes en paralelo sobre texto limpio
+ * FASE 2 — 3 agentes en paralelo sobre texto limpio (sin imagen)
  *   · Mistral Small, Gemini 2.0 Flash, OpenRouter Gemma 3
- *   · Reciben el texto parseado, sin imagen — sin límites de visión
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -38,6 +37,7 @@ IMPORTE DE LA SANCIÓN:
 PUNTOS RETIRADOS: 
 LUGAR DE LA INFRACCIÓN: 
 MATRÍCULA / VEHÍCULO: 
+MARCA Y MODELO: 
 
 === DATOS DEL DENUNCIADO ===
 NOMBRE: 
@@ -45,37 +45,40 @@ DNI/NIF:
 DOMICILIO: 
 
 === TEXTO LITERAL RELEVANTE ===
-[Transcribe aquí el texto más importante del documento: hechos descritos, motivación de la sanción, advertencias legales, y cualquier frase relevante para recurrir]
+[Transcribe aquí el texto más importante del documento: hechos descritos, motivación de la sanción, base legal citada, advertencias sobre plazos y procedimientos]
 
 === OBSERVACIONES ===
-[Cualquier dato adicional visible que pueda ser útil para redactar el recurso]
+[Cualquier dato adicional visible útil para redactar el recurso]
 
-Sé exhaustivo. No inventes datos — solo extrae lo que está escrito en el documento.`;
+Sé exhaustivo. Lee todo el documento. No inventes datos — solo extrae lo que está escrito.`;
 
-// ─── Fase 1: Parseo con Mistral Pixtral 12B ───────────────────────────────────
+// ─── Fase 1: Parseo con Qwen2.5-VL via OpenRouter ────────────────────────────
 
-async function parseDocumentWithMistral(
-  mistralApiKey: string,
+async function parseDocumentWithQwen(
+  openrouterApiKey: string,
   base64: string,
   mimeType: string,
   fileName: string
 ): Promise<string> {
-  // Para PDFs con capa de texto, intentamos pdf-parse primero (más rápido y fiable)
+
+  // Para PDFs con capa de texto, intentamos pdf-parse primero (más rápido)
   if (mimeType === "application/pdf") {
     try {
       const buffer = Buffer.from(base64, "base64");
       const parsed = await pdfParse(buffer);
       const text = (parsed.text || "").trim();
       if (text.length > 100) {
-        // PDF con texto: mandamos el texto a Pixtral para estructurarlo
-        const res = await fetch("https://api.mistral.ai/v1/chat/completions", {
+        // PDF con texto: mandamos el texto a Qwen para estructurarlo
+        const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${mistralApiKey}`,
+            Authorization: `Bearer ${openrouterApiKey}`,
+            "HTTP-Referer": "https://recursapp.vercel.app",
+            "X-Title": "RecursApp",
           },
           body: JSON.stringify({
-            model: "pixtral-12b-2409",
+            model: "qwen/qwen2.5-vl-72b-instruct:free",
             messages: [
               {
                 role: "user",
@@ -97,15 +100,17 @@ async function parseDocumentWithMistral(
     }
   }
 
-  // Imagen o PDF escaneado: visión directa con Pixtral
-  const res = await fetch("https://api.mistral.ai/v1/chat/completions", {
+  // Imagen o PDF escaneado: visión directa con Qwen2.5-VL
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${mistralApiKey}`,
+      Authorization: `Bearer ${openrouterApiKey}`,
+      "HTTP-Referer": "https://recursapp.vercel.app",
+      "X-Title": "RecursApp",
     },
     body: JSON.stringify({
-      model: "pixtral-12b-2409",
+      model: "qwen/qwen2.5-vl-72b-instruct:free",
       messages: [
         {
           role: "user",
@@ -128,7 +133,7 @@ async function parseDocumentWithMistral(
 
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`Mistral parseo ${res.status}: ${err.slice(0, 300)}`);
+    throw new Error(`Parseo OCR ${res.status}: ${err.slice(0, 300)}`);
   }
 
   const data = await res.json();
@@ -161,32 +166,24 @@ export async function POST(req: NextRequest) {
 
     const apiKeys = getServerApiKeys();
 
-    if (!apiKeys.mistral) {
+    if (!apiKeys.openrouter) {
       return NextResponse.json(
-        { error: "Se necesita MISTRAL_API_KEY para el parseo del documento. Configúrala en Vercel." },
+        { error: "Se necesita OPENROUTER_API_KEY para el parseo del documento. Configúrala en Vercel." },
         { status: 500 }
       );
     }
 
-    const hasAnyAgentKey = apiKeys.mistral || apiKeys.gemini || apiKeys.openrouter;
-    if (!hasAnyAgentKey) {
-      return NextResponse.json(
-        { error: "No hay API keys de agentes configuradas." },
-        { status: 500 }
-      );
-    }
-
-    // ── FASE 1: Parsear el documento con Mistral Pixtral ─────────────────────
-    console.log("Fase 1: parseando documento con Mistral Pixtral 12B...");
+    // ── FASE 1: Parsear el documento con Qwen2.5-VL via OpenRouter ───────────
+    console.log("Fase 1: parseando con Qwen2.5-VL-72B (OpenRouter)...");
     let parsedText: string;
     try {
-      parsedText = await parseDocumentWithMistral(
-        apiKeys.mistral,
+      parsedText = await parseDocumentWithQwen(
+        apiKeys.openrouter,
         multaFile.base64,
         multaFile.type,
         multaFile.name
       );
-      console.log("Parseo OK:", parsedText.slice(0, 120));
+      console.log("Parseo OK, primeras líneas:", parsedText.slice(0, 150));
     } catch (err) {
       return NextResponse.json(
         { error: `Error al leer el documento: ${err instanceof Error ? err.message : "Error desconocido"}` },
@@ -250,7 +247,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       agentResults,
       instructions: generateInstructions(),
-      parsedText, // devolvemos el parseo por si la UI quiere mostrarlo
+      parsedText,
     });
   } catch (err) {
     console.error("Analyze error:", err);
