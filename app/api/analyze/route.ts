@@ -1,18 +1,19 @@
 /**
  * app/api/analyze/route.ts
  *
- * FASE 1 — Parseo visual con openrouter/auto (elige modelo visión :free disponible automáticamente)
- *   · Modelo especializado en OCR y document parsing, completamente gratuito
- *   · Soporta imágenes y PDFs escaneados con visión nativa
- *   · Una sola key hace el parseo Y uno de los 3 agentes
+ * FASE 1 — Parseo visual (OpenRouter/auto · OPENROUTER_API_KEY)
+ *   Lee la imagen/PDF y extrae todos los datos estructurados
  *
- * FASE 2 — 3 agentes en paralelo sobre texto limpio (sin imagen)
- *   · Mistral Small, Gemini 2.0 Flash, OpenRouter Gemma 3
+ * FASE 2 — 3 agentes en paralelo (Mistral Small + Llama 3.3 + DeepSeek V3)
+ *   Cada uno redacta su propio borrador de recurso sobre el texto parseado
+ *
+ * FASE 3 — Agente maestro fusionador (Mistral Large o DeepSeek fallback)
+ *   Recibe los 3 borradores y genera el RECURSO DEFINITIVO unificado
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import pdfParse from "pdf-parse";
-import { callAgent, buildUserPrompt, generateInstructions, FIXED_AGENTS } from "@/lib/llm";
+import { callAgent, callMasterAgent, buildUserPrompt, generateInstructions, FIXED_AGENTS } from "@/lib/llm";
 
 export const maxDuration = 120;
 
@@ -45,30 +46,23 @@ DNI/NIF:
 DOMICILIO: 
 
 === TEXTO LITERAL RELEVANTE ===
-[Transcribe aquí el texto más importante del documento: hechos descritos, motivación de la sanción, base legal citada, advertencias sobre plazos y procedimientos]
+[Transcribe el texto más importante: hechos, motivación, base legal citada, advertencias sobre plazos]
 
 === OBSERVACIONES ===
 [Cualquier dato adicional visible útil para redactar el recurso]
 
-Sé exhaustivo. Lee todo el documento. No inventes datos — solo extrae lo que está escrito.`;
+Sé exhaustivo. No inventes datos — solo extrae lo que está escrito en el documento.`;
 
-// ─── Fase 1: Parseo con Qwen2.5-VL via OpenRouter ────────────────────────────
+// ─── Fase 1: Parseo con OpenRouter/auto ──────────────────────────────────────
 
-async function parseDocumentWithLlamaVision(
-  openrouterApiKey: string,
-  base64: string,
-  mimeType: string,
-  fileName: string
-): Promise<string> {
-
-  // Para PDFs con capa de texto, intentamos pdf-parse primero (más rápido)
+async function parseDocument(openrouterApiKey: string, base64: string, mimeType: string, fileName: string): Promise<string> {
+  // PDFs con texto: intentar pdf-parse primero
   if (mimeType === "application/pdf") {
     try {
       const buffer = Buffer.from(base64, "base64");
       const parsed = await pdfParse(buffer);
       const text = (parsed.text || "").trim();
       if (text.length > 100) {
-        // PDF con texto: mandamos el texto a Qwen para estructurarlo
         const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
           method: "POST",
           headers: {
@@ -79,12 +73,7 @@ async function parseDocumentWithLlamaVision(
           },
           body: JSON.stringify({
             model: "openrouter/auto",
-            messages: [
-              {
-                role: "user",
-                content: `${PARSE_PROMPT}\n\nTEXTO DEL DOCUMENTO:\n${text}`,
-              },
-            ],
+            messages: [{ role: "user", content: `${PARSE_PROMPT}\n\nTEXTO DEL DOCUMENTO:\n${text}` }],
             max_tokens: 2000,
             temperature: 0.1,
           }),
@@ -95,12 +84,10 @@ async function parseDocumentWithLlamaVision(
           if (result.length > 50) return result;
         }
       }
-    } catch {
-      // Fallback a visión directa
-    }
+    } catch { /* fallback a visión */ }
   }
 
-  // Imagen o PDF escaneado: visión directa con Qwen2.5-VL
+  // Imagen o PDF escaneado: visión directa
   const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -111,21 +98,13 @@ async function parseDocumentWithLlamaVision(
     },
     body: JSON.stringify({
       model: "openrouter/auto",
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: PARSE_PROMPT,
-            },
-            {
-              type: "image_url",
-              image_url: { url: `data:${mimeType};base64,${base64}` },
-            },
-          ],
-        },
-      ],
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: PARSE_PROMPT },
+          { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64}` } },
+        ],
+      }],
       max_tokens: 2000,
       temperature: 0.1,
     }),
@@ -135,7 +114,6 @@ async function parseDocumentWithLlamaVision(
     const err = await res.text();
     throw new Error(`Parseo OCR ${res.status}: ${err.slice(0, 300)}`);
   }
-
   const data = await res.json();
   return data.choices?.[0]?.message?.content || `[No se pudo parsear: ${fileName}]`;
 }
@@ -145,8 +123,6 @@ async function parseDocumentWithLlamaVision(
 function getServerApiKeys() {
   return {
     mistral: process.env.MISTRAL_API_KEY || "",
-    // gemini eliminado: rate limits demasiado bajos en free tier
-    gemini: process.env.GEMINI_API_KEY || "",
     openrouter: process.env.OPENROUTER_API_KEY || "",
   };
 }
@@ -159,75 +135,48 @@ export async function POST(req: NextRequest) {
     const { multaFile, supportFiles, additionalContext } = body;
 
     if (!multaFile?.base64) {
-      return NextResponse.json(
-        { error: "No se proporcionó el documento de la multa" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "No se proporcionó el documento de la multa" }, { status: 400 });
     }
 
     const apiKeys = getServerApiKeys();
 
     if (!apiKeys.openrouter) {
-      return NextResponse.json(
-        { error: "Se necesita OPENROUTER_API_KEY para el parseo del documento. Configúrala en Vercel." },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "Se necesita OPENROUTER_API_KEY. Configúrala en Vercel." }, { status: 500 });
     }
 
-    // ── FASE 1: Parsear el documento con Qwen2.5-VL via OpenRouter ───────────
-    console.log("Fase 1: parseando con openrouter/auto (vision free)...");
+    // ── FASE 1: Parsear ──────────────────────────────────────────────────────
+    console.log("Fase 1: parseando documento...");
     let parsedText: string;
     try {
-      parsedText = await parseDocumentWithLlamaVision(
-        apiKeys.openrouter,
-        multaFile.base64,
-        multaFile.type,
-        multaFile.name
-      );
-      console.log("Parseo OK, primeras líneas:", parsedText.slice(0, 150));
+      parsedText = await parseDocument(apiKeys.openrouter, multaFile.base64, multaFile.type, multaFile.name);
+      console.log("Parseo OK:", parsedText.slice(0, 120));
     } catch (err) {
       return NextResponse.json(
-        { error: `Error al leer el documento: ${err instanceof Error ? err.message : "Error desconocido"}` },
+        { error: `Error al leer el documento: ${err instanceof Error ? err.message : "Error"}` },
         { status: 500 }
       );
     }
 
-    // ── FASE 2: Los 3 agentes generan el recurso sobre texto limpio ──────────
-    console.log("Fase 2: generando recursos con 3 agentes en paralelo...");
-    const supportFilesData = (supportFiles || []).map(
-      (sf: { name: string; context: string }) => ({
-        name: sf.name,
-        context: sf.context || "",
-      })
-    );
-
+    // ── FASE 2: 3 agentes en paralelo ────────────────────────────────────────
+    console.log("Fase 2: 3 agentes redactando en paralelo...");
+    const supportFilesData = (supportFiles || []).map((sf: { name: string; context: string }) => ({
+      name: sf.name, context: sf.context || "",
+    }));
     const userPrompt = buildUserPrompt(parsedText, supportFilesData, additionalContext || "");
 
     const agentPromises = FIXED_AGENTS.map(async (agentDef) => {
       const key = apiKeys[agentDef.provider];
       if (!key) {
         return {
-          agentId: agentDef.id,
-          agentName: agentDef.name,
-          label: agentDef.label,
-          color: agentDef.color,
-          status: "skipped" as const,
-          content: "",
-          error: "Sin API key configurada en el servidor",
+          agentId: agentDef.id, agentName: agentDef.name, label: agentDef.label, color: agentDef.color,
+          status: "skipped" as const, content: "", error: "Sin API key configurada",
         };
       }
-      const result = await callAgent(
-        { ...agentDef, apiKey: key, enabled: true },
-        userPrompt
-      );
+      const result = await callAgent({ ...agentDef, apiKey: key, enabled: true }, userPrompt);
       return {
-        agentId: agentDef.id,
-        agentName: agentDef.name,
-        label: agentDef.label,
-        color: agentDef.color,
+        agentId: agentDef.id, agentName: agentDef.name, label: agentDef.label, color: agentDef.color,
         status: result.error ? ("error" as const) : ("done" as const),
-        content: result.content,
-        error: result.error,
+        content: result.content, error: result.error,
       };
     });
 
@@ -235,26 +184,29 @@ export async function POST(req: NextRequest) {
     const agentResults = settled.map((r, idx) => {
       if (r.status === "fulfilled") return r.value;
       return {
-        agentId: FIXED_AGENTS[idx].id,
-        agentName: FIXED_AGENTS[idx].name,
-        label: FIXED_AGENTS[idx].label,
-        color: FIXED_AGENTS[idx].color,
-        status: "error" as const,
-        content: "",
-        error: (r.reason as Error)?.message || "Error desconocido",
+        agentId: FIXED_AGENTS[idx].id, agentName: FIXED_AGENTS[idx].name,
+        label: FIXED_AGENTS[idx].label, color: FIXED_AGENTS[idx].color,
+        status: "error" as const, content: "", error: (r.reason as Error)?.message || "Error desconocido",
       };
     });
 
+    // ── FASE 3: Agente maestro fusiona los borradores ────────────────────────
+    console.log("Fase 3: agente maestro fusionando borradores...");
+    const successfulDrafts = agentResults
+      .filter(r => r.status === "done" && r.content)
+      .map(r => ({ agentName: r.label, content: r.content }));
+
+    const masterResult = await callMasterAgent(apiKeys, successfulDrafts);
+
     return NextResponse.json({
       agentResults,
+      masterRecurso: masterResult.content,
+      masterError: masterResult.error,
       instructions: generateInstructions(),
       parsedText,
     });
   } catch (err) {
     console.error("Analyze error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Error interno" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Error interno" }, { status: 500 });
   }
 }
