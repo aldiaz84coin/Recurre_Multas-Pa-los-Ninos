@@ -1,7 +1,7 @@
 /**
  * app/api/analyze/route.ts
  *
- * FASE 1 — Parseo visual con Llama 3.2 11B Vision vía OpenRouter (OPENROUTER_API_KEY)
+ * FASE 1 — Parseo visual con openrouter/auto (elige modelo visión :free disponible automáticamente)
  *   · Modelo especializado en OCR y document parsing, completamente gratuito
  *   · Soporta imágenes y PDFs escaneados con visión nativa
  *   · Una sola key hace el parseo Y uno de los 3 agentes
@@ -78,7 +78,7 @@ async function parseDocumentWithLlamaVision(
             "X-Title": "RecursApp",
           },
           body: JSON.stringify({
-            model: "meta-llama/llama-3.2-11b-vision-instruct:free",
+            model: "openrouter/auto",
             messages: [
               {
                 role: "user",
@@ -110,18 +110,18 @@ async function parseDocumentWithLlamaVision(
       "X-Title": "RecursApp",
     },
     body: JSON.stringify({
-      model: "meta-llama/llama-3.2-11b-vision-instruct:free",
+      model: "openrouter/auto",
       messages: [
         {
           role: "user",
           content: [
             {
-              type: "image_url",
-              image_url: { url: `data:${mimeType};base64,${base64}` },
-            },
-            {
               type: "text",
               text: PARSE_PROMPT,
+            },
+            {
+              type: "image_url",
+              image_url: { url: `data:${mimeType};base64,${base64}` },
             },
           ],
         },
@@ -174,7 +174,7 @@ export async function POST(req: NextRequest) {
     }
 
     // ── FASE 1: Parsear el documento con Qwen2.5-VL via OpenRouter ───────────
-    console.log("Fase 1: parseando con Llama-3.2-11B-Vision (OpenRouter)...");
+    console.log("Fase 1: parseando con openrouter/auto (vision free)...");
     let parsedText: string;
     try {
       parsedText = await parseDocumentWithLlamaVision(
