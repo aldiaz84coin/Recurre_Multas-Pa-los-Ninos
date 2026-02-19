@@ -1,3 +1,12 @@
+/**
+ * lib/llm.ts
+ *
+ * Two-phase LLM orchestration:
+ *   Phase 1 – All agents extract structured metadata (legislation, organism…)
+ *              from the REAL multa text/image in parallel → consensus merge
+ *   Phase 2 – All agents generate the recurso enriched with Phase 1 data
+ */
+
 export interface AgentConfig {
   id: string;
   name: string;
@@ -15,74 +24,69 @@ export interface LLMResponse {
 }
 
 export interface FineMetadata {
-  legislation: string[];
-  organism: string;
-  organismAddress: string;
-  fineType: string;
-  fineAmount: string;
-  deadline: string;
-  rawSummary: string;
+  legislation: string[];      // Articles / norms found in the fine document
+  organism: string;           // Exact name of the sanctioning body
+  organismAddress: string;    // Address / sede if present
+  fineType: string;           // Brief description of the infraction
+  fineAmount: string;         // Amount + unit
+  deadline: string;           // Appeal deadline if mentioned
+  rawSummary: string;         // 2-3 sentence summary of the sanctioned facts
 }
 
-// ─── System prompts ───────────────────────────────────────────────────────────
+// ─── Prompts ──────────────────────────────────────────────────────────────────
 
 const EXTRACTION_SYSTEM_PROMPT = `Eres un experto en derecho administrativo español.
-Se te proporciona el contenido o descripción de una notificación de multa/sanción española.
+Se te proporciona el texto completo (o imagen) de una notificación de multa o sanción administrativa española.
 
-Extrae ÚNICAMENTE la siguiente información en formato JSON estricto, sin texto adicional ni markdown:
+Tu única tarea es extraer los siguientes datos en formato JSON estricto, SIN ningún texto adicional ni bloques markdown:
 
 {
-  "legislation": ["lista de artículos y normas citadas en la multa, ej: Art. 18 RGC, Ley 18/2009"],
-  "organism": "nombre exacto del organismo que impuso la sanción y al que hay que dirigir el recurso",
-  "organismAddress": "dirección o sede del organismo si aparece, cadena vacía si no",
-  "fineType": "tipo de infracción descrita brevemente",
-  "fineAmount": "importe de la sanción con unidad, cadena vacía si no aparece",
-  "deadline": "plazo para recurrir si se menciona, cadena vacía si no",
-  "rawSummary": "resumen en 2-3 frases de los hechos sancionados"
+  "legislation": ["array con TODOS los artículos, normas y reglamentos citados expresamente en el documento, ej: 'Art. 91.2 LSV', 'RD 1428/2003 art. 52', 'Ordenanza Municipal de Circulación art. 18'"],
+  "organism": "nombre EXACTO del organismo que emite la sanción y al que debe dirigirse el recurso, tal como aparece en el documento",
+  "organismAddress": "dirección postal completa del organismo si aparece en el documento, cadena vacía si no",
+  "fineType": "descripción breve de la infracción tal como aparece en el documento",
+  "fineAmount": "importe exacto de la sanción con su moneda, cadena vacía si no aparece",
+  "deadline": "plazo exacto para recurrir tal como aparece en el documento, cadena vacía si no",
+  "rawSummary": "resumen de 2-3 frases de los hechos sancionados según el documento"
 }
 
-Responde SOLO con el JSON, sin texto antes ni después.`;
+IMPORTANTE:
+- Copia los artículos y organismos EXACTAMENTE como aparecen en el documento.
+- Si un campo no aparece en el documento, usa cadena vacía o array vacío.
+- Responde SOLO con el JSON. Ni una palabra más.`;
 
-const SYSTEM_PROMPT_TEMPLATE = (role: string, metadata: FineMetadata | null) => {
-  const metaBlock = metadata
-    ? `
-=== INFORMACIÓN EXTRAÍDA DE LA MULTA ===
-- Tipo de infracción: ${metadata.fineType || "no determinado"}
-- Legislación aplicable citada: ${metadata.legislation.join(", ") || "no especificada"}
-- Organismo sancionador: ${metadata.organism || "no identificado"}
+const RECURSO_SYSTEM_PROMPT = (role: string, metadata: FineMetadata) =>
+  `Eres un experto en derecho español actuando como: ${role}.
+
+DATOS EXTRAÍDOS DE LA MULTA (ya verificados por consenso de agentes):
+- Organismo sancionador: ${metadata.organism || "ver documento"}
+- Legislación citada en la multa: ${metadata.legislation.length > 0 ? metadata.legislation.join(", ") : "no especificada"}
+- Tipo de infracción: ${metadata.fineType || "ver documento"}
 - Importe: ${metadata.fineAmount || "no especificado"}
-- Plazo recurso: ${metadata.deadline || "verificar en notificación"}
-- Resumen: ${metadata.rawSummary}
-=========================================
-`
-    : "";
+- Plazo de recurso: ${metadata.deadline || "1 mes desde la notificación"}
+- Resumen: ${metadata.rawSummary || "ver documento"}
 
-  return `Eres un experto en derecho español actuando como: ${role}.
-${metaBlock}
-Tu tarea es redactar un recurso administrativo profesional contra la multa descrita, dirigido específicamente a: ${metadata?.organism || "el organismo sancionador"}.
+Redacta un RECURSO ADMINISTRATIVO profesional con estas reglas:
+1. Encabézalo con un bloque de datos del recurrente para rellenar a mano (NOMBRE:___ DNI:___ DOMICILIO:___).
+2. Dirígelo EXPLÍCITAMENTE a: ${metadata.organism || "el organismo sancionador"}.
+3. Cita y refuta jurídicamente cada artículo detectado: ${metadata.legislation.join(", ") || "los citados en la notificación"}.
+4. Añade jurisprudencia o normativa adicional favorable al recurrente.
+5. Estructura obligatoria: ENCABEZADO · HECHOS · FUNDAMENTOS DE DERECHO · SÚPLICA.
+6. Tono formal y persuasivo.
 
-El recurso debe:
-- Encabezarse con los datos del recurrente (dejar en blanco para que el usuario los complete: Nombre, DNI, Domicilio)
-- Dirigirse EXPLÍCITAMENTE a: ${metadata?.organism || "el organismo competente"}
-- Citar y refutar jurídicamente los artículos de la multa: ${metadata?.legislation.join(", ") || "los indicados en la notificación"}
-- Estructurarse en: Encabezado, Hechos, Fundamentos de Derecho, Petición/Súplica
-- Ser formal, preciso y persuasivo
-- Añadir jurisprudencia o normativa adicional que apoye el recurso
-
-Responde ÚNICAMENTE con el texto del recurso, sin comentarios adicionales.`;
-};
+Responde ÚNICAMENTE con el texto del recurso. Sin comentarios previos ni posteriores.`;
 
 // ─── Low-level API callers ────────────────────────────────────────────────────
 
-async function callOpenAICompatibleRaw(
+async function callOpenAIRaw(
   config: AgentConfig,
-  systemPrompt: string,
-  userMessage: string,
-  maxTokens = 3000,
-  temperature = 0.3
+  system: string,
+  userContent: unknown,
+  maxTokens: number,
+  temperature: number
 ): Promise<string> {
   const baseUrl = config.baseUrl || "https://api.openai.com/v1";
-  const response = await fetch(`${baseUrl}/chat/completions`, {
+  const res = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -94,90 +98,111 @@ async function callOpenAICompatibleRaw(
     body: JSON.stringify({
       model: config.model,
       messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userMessage },
+        { role: "system", content: system },
+        { role: "user", content: userContent },
       ],
       max_tokens: maxTokens,
       temperature,
     }),
   });
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`${config.provider} API error ${response.status}: ${err.slice(0, 200)}`);
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`${config.provider} error ${res.status}: ${err.slice(0, 200)}`);
   }
-  const data = await response.json();
+  const data = await res.json();
   return data.choices?.[0]?.message?.content || "";
 }
 
 async function callGeminiRaw(
   config: AgentConfig,
-  prompt: string,
-  maxTokens = 3000,
-  temperature = 0.3
+  textPrompt: string,
+  maxTokens: number,
+  temperature: number,
+  imageBase64?: string,
+  imageMime?: string
 ): Promise<string> {
   const model = config.model || "gemini-1.5-flash";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${config.apiKey}`;
-  const response = await fetch(url, {
+
+  const parts: Array<Record<string, unknown>> = [];
+  if (imageBase64 && imageMime) {
+    parts.push({ inlineData: { mimeType: imageMime, data: imageBase64 } });
+  }
+  parts.push({ text: textPrompt });
+
+  const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
+      contents: [{ parts }],
       generationConfig: { maxOutputTokens: maxTokens, temperature },
     }),
   });
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Gemini API error ${response.status}: ${err.slice(0, 200)}`);
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Gemini error ${res.status}: ${err.slice(0, 200)}`);
   }
-  const data = await response.json();
+  const data = await res.json();
   return data.candidates?.[0]?.content?.parts?.[0]?.text || "";
 }
 
-// ─── Metadata extraction ──────────────────────────────────────────────────────
+// ─── Phase 1: Metadata extraction ────────────────────────────────────────────
 
-async function extractMetadataWithAgent(
+async function extractWithOneAgent(
   config: AgentConfig,
-  multaContent: string
+  multaText: string,
+  imageBase64?: string,
+  imageMime?: string
 ): Promise<FineMetadata | null> {
   try {
     let raw = "";
+
     if (config.provider === "gemini") {
       raw = await callGeminiRaw(
         config,
-        `${EXTRACTION_SYSTEM_PROMPT}\n\n---\n\n${multaContent}`,
-        800,
-        0.1
+        `${EXTRACTION_SYSTEM_PROMPT}\n\n---\n\n${multaText}`,
+        1000,
+        0.1,
+        imageBase64,
+        imageMime
       );
     } else {
-      raw = await callOpenAICompatibleRaw(
-        config,
-        EXTRACTION_SYSTEM_PROMPT,
-        multaContent,
-        800,
-        0.1
-      );
+      // Build user content — attach image for vision models (gpt-4o etc.)
+      const userContent: Array<Record<string, unknown>> = [];
+      if (imageBase64 && imageMime) {
+        userContent.push({
+          type: "image_url",
+          image_url: { url: `data:${imageMime};base64,${imageBase64}` },
+        });
+      }
+      userContent.push({ type: "text", text: multaText });
+      raw = await callOpenAIRaw(config, EXTRACTION_SYSTEM_PROMPT, userContent, 1000, 0.1);
     }
-    const clean = raw.replace(/```json|```/g, "").trim();
-    return JSON.parse(clean) as FineMetadata;
+
+    // Strip markdown fences and find JSON object
+    const clean = raw.replace(/```json[\s\S]*?```|```[\s\S]*?```/g, "").trim();
+    const jsonMatch = clean.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    return JSON.parse(jsonMatch[0]) as FineMetadata;
   } catch {
     return null;
   }
 }
 
 /**
- * Run metadata extraction in parallel across all enabled agents and merge by consensus
+ * Run extraction across ALL enabled agents in parallel → consensus merge
  */
 export async function extractFineMetadata(
-  agentConfigs: AgentConfig[],
-  multaContent: string
+  agents: AgentConfig[],
+  multaText: string,
+  imageBase64?: string,
+  imageMime?: string
 ): Promise<FineMetadata> {
-  const enabled = agentConfigs.filter((a) => a.enabled && a.apiKey);
-
-  const results = await Promise.allSettled(
-    enabled.map((a) => extractMetadataWithAgent(a, multaContent))
+  const settled = await Promise.allSettled(
+    agents.map((a) => extractWithOneAgent(a, multaText, imageBase64, imageMime))
   );
 
-  const valid: FineMetadata[] = results
+  const valid: FineMetadata[] = settled
     .filter(
       (r): r is PromiseFulfilledResult<FineMetadata> =>
         r.status === "fulfilled" && r.value !== null
@@ -185,200 +210,162 @@ export async function extractFineMetadata(
     .map((r) => r.value);
 
   if (valid.length === 0) {
-    return {
-      legislation: [],
-      organism: "",
-      organismAddress: "",
-      fineType: "",
-      fineAmount: "",
-      deadline: "",
-      rawSummary: "",
-    };
+    return { legislation: [], organism: "", organismAddress: "", fineType: "", fineAmount: "", deadline: "", rawSummary: "" };
   }
 
-  // Legislation: union of all unique entries
-  const legislationSet = new Set<string>();
+  // Legislation: weighted by how many agents agree, deduped by lowercase key
+  const legCount: Record<string, number> = {};
+  const legOriginal: Record<string, string> = {};
   for (const v of valid) {
     for (const l of v.legislation) {
-      legislationSet.add(l.trim());
+      const key = l.trim().toLowerCase();
+      if (!key) continue;
+      legCount[key] = (legCount[key] || 0) + 1;
+      if (!legOriginal[key]) legOriginal[key] = l.trim();
     }
   }
+  const legislation = Object.keys(legCount)
+    .sort((a, b) => legCount[b] - legCount[a])
+    .map((k) => legOriginal[k]);
 
   // Organism: majority vote
-  const organismCounts: Record<string, number> = {};
+  const orgCount: Record<string, number> = {};
   for (const v of valid) {
-    if (v.organism) {
-      organismCounts[v.organism] = (organismCounts[v.organism] || 0) + 1;
-    }
+    const o = (v.organism || "").trim();
+    if (o) orgCount[o] = (orgCount[o] || 0) + 1;
   }
-  const organism =
-    Object.entries(organismCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+  const organism = Object.entries(orgCount).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
 
-  // Other string fields: pick longest non-empty (most informative)
-  const pick = (field: keyof FineMetadata): string => {
-    const vals = valid
-      .map((v) => v[field])
-      .filter((x): x is string => typeof x === "string" && x.length > 0);
-    return vals.sort((a, b) => b.length - a.length)[0] || "";
-  };
+  // Other strings: longest non-empty wins (most detail)
+  const pickLongest = (field: keyof Omit<FineMetadata, "legislation">): string =>
+    valid
+      .map((v) => (v[field] as string) || "")
+      .filter((x) => x.length > 0)
+      .sort((a, b) => b.length - a.length)[0] || "";
 
   return {
-    legislation: Array.from(legislationSet),
+    legislation,
     organism,
-    organismAddress: pick("organismAddress"),
-    fineType: pick("fineType"),
-    fineAmount: pick("fineAmount"),
-    deadline: pick("deadline"),
-    rawSummary: pick("rawSummary"),
+    organismAddress: pickLongest("organismAddress"),
+    fineType: pickLongest("fineType"),
+    fineAmount: pickLongest("fineAmount"),
+    deadline: pickLongest("deadline"),
+    rawSummary: pickLongest("rawSummary"),
   };
 }
 
-// ─── Main agent call ──────────────────────────────────────────────────────────
+// ─── Phase 2: Recurso generation ─────────────────────────────────────────────
 
 export async function callAgent(
   config: AgentConfig,
-  userMessage: string,
-  metadata: FineMetadata | null = null
+  userPrompt: string,
+  metadata: FineMetadata,
+  imageBase64?: string,
+  imageMime?: string
 ): Promise<LLMResponse> {
-  if (!config.apiKey) {
-    return { content: "", error: "Sin API key configurada" };
-  }
+  if (!config.apiKey) return { content: "", error: "Sin API key configurada" };
 
   try {
-    const systemPrompt = SYSTEM_PROMPT_TEMPLATE(config.role, metadata);
+    const system = RECURSO_SYSTEM_PROMPT(config.role, metadata);
     let content = "";
 
     if (config.provider === "gemini") {
       content = await callGeminiRaw(
         config,
-        `${systemPrompt}\n\n---\n\n${userMessage}`,
+        `${system}\n\n---\n\n${userPrompt}`,
         3000,
-        0.3
+        0.3,
+        imageBase64,
+        imageMime
       );
     } else {
-      content = await callOpenAICompatibleRaw(config, systemPrompt, userMessage, 3000, 0.3);
+      const userContent: Array<Record<string, unknown>> = [];
+      if (imageBase64 && imageMime) {
+        userContent.push({
+          type: "image_url",
+          image_url: { url: `data:${imageMime};base64,${imageBase64}` },
+        });
+      }
+      userContent.push({ type: "text", text: userPrompt });
+      content = await callOpenAIRaw(config, system, userContent, 3000, 0.3);
     }
-
     return { content };
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "Error desconocido";
-    return { content: "", error: msg };
+    return { content: "", error: err instanceof Error ? err.message : "Error desconocido" };
   }
 }
 
-// ─── Prompt builder ───────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 export function buildEnrichedPrompt(
-  multaContent: string,
+  multaText: string,
   metadata: FineMetadata,
-  supportFiles: { name: string; context: string; textContent?: string }[],
+  supportFiles: { name: string; context: string }[],
   additionalContext: string
 ): string {
-  let prompt = `=== DOCUMENTO DE LA MULTA ===\n${multaContent}\n\n`;
-
-  prompt += `=== ANÁLISIS PREVIO (consenso de agentes) ===\n`;
-  prompt += `Tipo de infracción: ${metadata.fineType || "no determinado"}\n`;
-  prompt += `Legislación citada: ${metadata.legislation.length > 0 ? metadata.legislation.join(", ") : "no especificada"}\n`;
-  prompt += `Organismo sancionador: ${metadata.organism || "no identificado"}\n`;
-  if (metadata.organismAddress) prompt += `Sede: ${metadata.organismAddress}\n`;
-  if (metadata.fineAmount) prompt += `Importe: ${metadata.fineAmount}\n`;
-  if (metadata.deadline) prompt += `Plazo recurso: ${metadata.deadline}\n`;
-  prompt += `Resumen: ${metadata.rawSummary || "ver documento"}\n\n`;
+  let prompt = `=== CONTENIDO DE LA MULTA ===\n${multaText}\n\n`;
 
   if (supportFiles.length > 0) {
     prompt += `=== DOCUMENTACIÓN DE APOYO ===\n`;
     for (const sf of supportFiles) {
       prompt += `\n--- ${sf.name} ---\n`;
       if (sf.context) prompt += `Contexto: ${sf.context}\n`;
-      if (sf.textContent) prompt += `Contenido: ${sf.textContent}\n`;
     }
     prompt += "\n";
   }
 
   if (additionalContext) {
-    prompt += `=== CONTEXTO ADICIONAL DEL USUARIO ===\n${additionalContext}\n\n`;
+    prompt += `=== CONTEXTO ADICIONAL ===\n${additionalContext}\n\n`;
   }
 
-  prompt += `Redacta el recurso administrativo dirigido a: ${metadata.organism || "el organismo sancionador"}.`;
+  prompt += `Redacta el recurso dirigido a: ${metadata.organism || "el organismo sancionador"}, citando: ${metadata.legislation.join(", ") || "la legislación de la multa"}.`;
   return prompt;
 }
 
-// ─── Merge ────────────────────────────────────────────────────────────────────
-
 export function mergeResponses(responses: { agentName: string; content: string }[]): string {
   const valid = responses.filter((r) => r.content && r.content.length > 100);
-
-  if (valid.length === 0) {
-    return "No se pudo generar el recurso. Verifica la configuración de los agentes.";
-  }
-  if (valid.length === 1) {
-    return valid[0].content;
-  }
+  if (valid.length === 0) return "No se pudo generar el recurso. Verifica la configuración de los agentes.";
+  if (valid.length === 1) return valid[0].content;
 
   const sorted = [...valid].sort((a, b) => b.content.length - a.content.length);
   const base = sorted[0].content;
   const uniqueAdditions: string[] = [];
 
   for (let i = 1; i < sorted.length; i++) {
-    const otherParagraphs = sorted[i].content
-      .split(/\n{2,}/)
-      .filter((p) => p.trim().length > 100);
-
-    for (const para of otherParagraphs) {
-      // FIX: use plain array instead of Set spread to avoid downlevelIteration error
+    const otherParas = sorted[i].content.split(/\n{2,}/).filter((p) => p.trim().length > 100);
+    for (const para of otherParas) {
+      // Plain array ops — no Set spread, no downlevelIteration error
       const paraWords = para.toLowerCase().split(/\s+/).slice(0, 10);
       const isInBase = base.split(/\n{2,}/).some((basePara) => {
-        const baseWordsArr = basePara.toLowerCase().split(/\s+/).slice(0, 10);
-        const intersection = paraWords.filter((w) => baseWordsArr.indexOf(w) !== -1);
-        return intersection.length > 6;
+        const baseWords = basePara.toLowerCase().split(/\s+/).slice(0, 10);
+        let hits = 0;
+        for (let w = 0; w < paraWords.length; w++) {
+          if (baseWords.indexOf(paraWords[w]) !== -1) hits++;
+        }
+        return hits > 6;
       });
-
-      if (!isInBase && para.trim().length > 0) {
-        uniqueAdditions.push(para.trim());
-      }
+      if (!isInBase) uniqueAdditions.push(para.trim());
     }
   }
 
   if (uniqueAdditions.length === 0) return base;
 
-  const marker = /FUNDAMENTOS DE DERECHO|fundamentos de derecho|III\.|Fundamentos/i;
-  const markerIdx = base.search(marker);
-  if (markerIdx > 0) {
-    const insertPt = base.lastIndexOf("\n\n", base.indexOf("\n\n", markerIdx + 200));
-    return (
-      base.slice(0, insertPt) +
-      "\n\n" +
-      uniqueAdditions.join("\n\n") +
-      "\n\n" +
-      base.slice(insertPt)
-    );
-  }
-
   const supIdx = base.search(/SUPLICA|SOLICITA|suplica|solicita/i);
   if (supIdx > 0) {
-    return (
-      base.slice(0, supIdx) +
-      "\n\n" +
-      uniqueAdditions.join("\n\n") +
-      "\n\n" +
-      base.slice(supIdx)
-    );
+    return base.slice(0, supIdx) + "\n\n" + uniqueAdditions.join("\n\n") + "\n\n" + base.slice(supIdx);
   }
-
   return base + "\n\n---\n\n" + uniqueAdditions.join("\n\n");
 }
-
-// ─── Instructions ─────────────────────────────────────────────────────────────
 
 export function generateInstructionsFromMetadata(metadata: FineMetadata): string {
   const organism = metadata.organism || "el organismo sancionador";
   const address = metadata.organismAddress ? `\n   • Dirección: ${metadata.organismAddress}` : "";
-  const deadline = metadata.deadline || "1 mes desde la notificación (verifica en tu notificación)";
+  const deadline = metadata.deadline || "1 mes desde la notificación (verifica en tu documento)";
   const amount = metadata.fineAmount ? `\n   • Importe de la sanción: ${metadata.fineAmount}` : "";
   const legLines =
     metadata.legislation.length > 0
       ? metadata.legislation.map((l) => `   • ${l}`).join("\n")
-      : "   • Consultar el documento de la multa";
+      : "   • Ver documento de la multa";
 
   return `INSTRUCCIONES PARA PRESENTAR EL RECURSO
 ========================================
@@ -391,60 +378,43 @@ ${legLines}
 
 1. PLAZO DE PRESENTACIÓN
    • ${deadline}
-   • ¡IMPORTANTE! Verifica el plazo exacto en tu notificación
 
 2. DÓNDE PRESENTARLO
-   • Sede electrónica del organismo sancionador (preferible, deja registro)
-   • Presencialmente en el registro de: ${organism}${address}
+   • Sede electrónica de: ${organism}${address}
+   • Presencialmente en su registro
    • Por correo certificado con acuse de recibo
-   • En cualquier oficina de registro de la Administración (Ley 39/2015)
+   • En cualquier registro de la Administración (Ley 39/2015)
 
 3. DOCUMENTACIÓN A ADJUNTAR
-   ☐ Este recurso (impreso y firmado, o en PDF)
+   ☐ Este recurso (firmado)
    ☐ Copia de la notificación de la multa
    ☐ DNI/NIE del recurrente
-   ☐ Documentación de apoyo (fotos, testigos, mapas, etc.)
-   ☐ Si actúas por representación: poder notarial o autorización firmada
+   ☐ Documentación de apoyo (fotos, testigos, mapas…)
 
 4. PRESENTACIÓN ELECTRÓNICA (RECOMENDADA)
    • Necesitas: DNI electrónico, certificado digital o Cl@ve
-   • Accede a la sede electrónica de: ${organism}
-   • Guarda el justificante de presentación (número de registro)
+   • Guarda el justificante con número de registro
 
 5. PRESENTACIÓN PRESENCIAL
-   • Lleva el recurso impreso y firmado (2 copias)
-   • Pide sello de entrada en tu copia
-   • Conserva el resguardo
+   • Lleva 2 copias impresas y firmadas · Pide sello de entrada
 
 6. DESPUÉS DE PRESENTARLO
    • El organismo tiene 3 meses para resolver
-   • Si no hay resolución: silencio administrativo (generalmente negativo)
-   • En caso de desestimación: puedes acudir a la vía contencioso-administrativa
+   • Silencio negativo si no hay respuesta
+   • Recurso contencioso-administrativo si desestiman
 
 7. SUSPENSIÓN DEL PAGO
-   • La presentación del recurso NO suspende automáticamente la sanción
-   • Para suspender el pago, solicita expresamente la suspensión con garantía
-   • O paga con descuento del 50% si la normativa local lo permite (pronto pago)
+   • NO se suspende automáticamente al recurrir
+   • Solicita suspensión expresa con garantía si lo necesitas
 
-8. SEGUIMIENTO
-   • Solicita número de expediente al presentar
-   • Puedes consultar el estado en la sede electrónica de ${organism}
-   • Guarda todos los documentos y justificantes
-
-⚠️  NOTA LEGAL: Este recurso ha sido generado con asistencia de inteligencia artificial.
-    Se recomienda revisarlo con un abogado antes de presentarlo, especialmente
-    si la cuantía es elevada o el caso tiene complejidad jurídica.`;
+⚠️  NOTA LEGAL: Documento generado con IA. Revísalo antes de presentarlo.
+    No constituye asesoramiento jurídico profesional.`;
 }
 
-/** Legacy wrapper kept for backward compat */
-export function generateInstructions(_fineContent: string): string {
+/** Backward-compat */
+export function generateInstructions(_: string): string {
   return generateInstructionsFromMetadata({
-    legislation: [],
-    organism: "",
-    organismAddress: "",
-    fineType: "",
-    fineAmount: "",
-    deadline: "",
-    rawSummary: "",
+    legislation: [], organism: "", organismAddress: "",
+    fineType: "", fineAmount: "", deadline: "", rawSummary: "",
   });
 }
