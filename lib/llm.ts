@@ -1,11 +1,8 @@
 /**
  * lib/llm.ts
  *
- * Agentes (solo texto, sin visión — el parseo ya lo hizo OpenRouter/auto):
- * - Mistral Small   → tier gratuito, system prompt estándar
- * - OpenRouter x2  → dos modelos :free distintos sin system prompt (Gemma no lo soporta)
- *
- * Gemini eliminado: rate limits demasiado bajos en free tier.
+ * FASE 2 — 3 agentes en paralelo generan sus recursos
+ * FASE 3 — Mistral Large (el más potente disponible gratis) fusiona los 3 en el RECURSO DEFINITIVO
  */
 
 export interface AgentConfig {
@@ -15,7 +12,6 @@ export interface AgentConfig {
   model: string;
   apiKey: string;
   enabled: boolean;
-  noSystemPrompt?: boolean; // algunos modelos no aceptan role:system
 }
 
 export interface LLMResponse {
@@ -23,7 +19,7 @@ export interface LLMResponse {
   error?: string;
 }
 
-// ─── 3 agentes fijos ──────────────────────────────────────────────────────────
+// ─── 3 agentes de redacción ───────────────────────────────────────────────────
 
 export const FIXED_AGENTS: {
   id: string;
@@ -34,7 +30,6 @@ export const FIXED_AGENTS: {
   freeInfo: string;
   signupUrl: string;
   color: string;
-  noSystemPrompt?: boolean;
 }[] = [
   {
     id: "agent-mistral",
@@ -48,34 +43,31 @@ export const FIXED_AGENTS: {
   },
   {
     id: "agent-openrouter-1",
-    name: "Agente OpenRouter 1",
+    name: "Agente Llama",
     provider: "openrouter",
     model: "meta-llama/llama-3.3-70b-instruct:free",
     label: "OpenRouter · Llama 3.3 70B :free",
     freeInfo: "Gratis · sin coste · Sin tarjeta",
     signupUrl: "https://openrouter.ai/keys",
     color: "#8b5cf6",
-    noSystemPrompt: false,
   },
   {
     id: "agent-openrouter-2",
-    name: "Agente OpenRouter 2",
+    name: "Agente DeepSeek",
     provider: "openrouter",
     model: "deepseek/deepseek-chat-v3-0324:free",
     label: "OpenRouter · DeepSeek V3 :free",
     freeInfo: "Gratis · sin coste · Sin tarjeta",
     signupUrl: "https://openrouter.ai/keys",
     color: "#06b6d4",
-    noSystemPrompt: false,
   },
 ];
 
-// ─── Prompt del sistema ───────────────────────────────────────────────────────
+// ─── Prompt de redacción (agentes 1-3) ───────────────────────────────────────
 
-const SYSTEM_PROMPT = `Eres un experto en derecho administrativo español especializado en recursos de multas y sanciones.
+const DRAFT_PROMPT = `Eres un experto en derecho administrativo español especializado en recursos de multas y sanciones.
 
-Se te proporcionan los datos estructurados de una multa extraídos del documento original.
-Tu tarea es redactar un RECURSO DE REPOSICIÓN profesional y completo.
+Se te proporcionan los datos estructurados de una multa. Redacta un RECURSO DE REPOSICIÓN profesional y completo.
 
 ESTRUCTURA OBLIGATORIA:
 1. DATOS DEL RECURRENTE (bloque para rellenar: NOMBRE, DNI, DOMICILIO, TELÉFONO, EMAIL)
@@ -84,27 +76,51 @@ ESTRUCTURA OBLIGATORIA:
 4. FUNDAMENTOS DE DERECHO
    - Refuta jurídicamente cada artículo citado en la multa
    - Cita jurisprudencia y normativa favorable (Ley 39/2015, LSV, RD 1428/2003...)
-   - Argumenta defectos formales si los hay
+   - Argumenta defectos formales si los hay (notificación, competencia, plazo...)
 5. SÚPLICA (petición concreta: nulidad, anulación o reducción)
 6. LUGAR, FECHA Y FIRMA
 
-Reglas: tono formal y persuasivo, usa solo datos reales, sé exhaustivo en fundamentos de derecho, genera el recurso completo listo para presentar.
+Reglas: tono formal y persuasivo, usa solo datos reales, sé exhaustivo, genera el recurso completo.
+Responde ÚNICAMENTE con el texto del recurso. Sin comentarios ni explicaciones previas.`;
 
-Responde ÚNICAMENTE con el texto del recurso. Sin comentarios ni explicaciones.`;
+// ─── Prompt de fusión (agente maestro) ───────────────────────────────────────
 
-// ─── Mistral ──────────────────────────────────────────────────────────────────
+const MERGE_PROMPT = `Eres el mejor abogado administrativista de España, especializado en recursos de multas y sanciones de tráfico.
 
-async function callMistral(apiKey: string, userPrompt: string): Promise<string> {
+Se te presentan TRES borradores de recurso administrativo redactados por diferentes IAs para la misma multa.
+Tu misión es crear el RECURSO DEFINITIVO: el más completo, sólido, persuasivo y formalmente correcto posible.
+
+INSTRUCCIONES DE FUSIÓN:
+- Analiza los tres borradores y extrae lo mejor de cada uno
+- Mantén TODOS los argumentos jurídicos válidos que aparezcan en cualquiera de los tres
+- Elige la redacción más clara y formal para cada sección
+- Elimina redundancias y contradicciones
+- Añade cualquier argumento o jurisprudencia adicional que mejore el recurso
+- El resultado debe ser UN SOLO recurso coherente, completo y listo para presentar
+
+ESTRUCTURA OBLIGATORIA del recurso definitivo:
+1. DATOS DEL RECURRENTE (bloque para rellenar: NOMBRE, DNI, DOMICILIO, TELÉFONO, EMAIL)
+2. ORGANISMO AL QUE SE DIRIGE
+3. HECHOS
+4. FUNDAMENTOS DE DERECHO (esta sección debe ser especialmente exhaustiva — recoge todos los argumentos válidos de los tres borradores)
+5. SÚPLICA
+6. LUGAR, FECHA Y FIRMA
+
+Responde ÚNICAMENTE con el texto del recurso definitivo. Sin comentarios, sin explicaciones, sin comparativa de borradores.`;
+
+// ─── Llamadas a APIs ──────────────────────────────────────────────────────────
+
+async function callMistral(apiKey: string, model: string, systemPrompt: string, userPrompt: string): Promise<string> {
   const res = await fetch("https://api.mistral.ai/v1/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
-      model: "mistral-small-latest",
+      model,
       messages: [
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      max_tokens: 4000,
+      max_tokens: 6000,
       temperature: 0.3,
     }),
   });
@@ -116,13 +132,9 @@ async function callMistral(apiKey: string, userPrompt: string): Promise<string> 
   return data.choices?.[0]?.message?.content || "";
 }
 
-// ─── OpenRouter (sin system prompt separado — va incluido en el user message) ─
-
-async function callOpenRouter(apiKey: string, model: string, userPrompt: string): Promise<string> {
-  // Algunos modelos de OpenRouter (Gemma, etc.) no aceptan role:system.
-  // Solución universal: incluir el system prompt dentro del user message.
-  const fullPrompt = `${SYSTEM_PROMPT}\n\n---\n\n${userPrompt}`;
-
+async function callOpenRouter(apiKey: string, model: string, systemPrompt: string, userPrompt: string): Promise<string> {
+  // System prompt embebido en user para compatibilidad universal con todos los modelos
+  const fullPrompt = `${systemPrompt}\n\n---\n\n${userPrompt}`;
   const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -133,10 +145,8 @@ async function callOpenRouter(apiKey: string, model: string, userPrompt: string)
     },
     body: JSON.stringify({
       model,
-      messages: [
-        { role: "user", content: fullPrompt },
-      ],
-      max_tokens: 4000,
+      messages: [{ role: "user", content: fullPrompt }],
+      max_tokens: 6000,
       temperature: 0.3,
     }),
   });
@@ -148,19 +158,16 @@ async function callOpenRouter(apiKey: string, model: string, userPrompt: string)
   return data.choices?.[0]?.message?.content || "";
 }
 
-// ─── Función principal ────────────────────────────────────────────────────────
+// ─── Agente redactor (fase 2) ─────────────────────────────────────────────────
 
-export async function callAgent(
-  config: AgentConfig,
-  userPrompt: string
-): Promise<LLMResponse> {
+export async function callAgent(config: AgentConfig, userPrompt: string): Promise<LLMResponse> {
   if (!config.apiKey) return { content: "", error: "Sin API key configurada" };
   try {
     let content = "";
     if (config.provider === "mistral") {
-      content = await callMistral(config.apiKey, userPrompt);
-    } else if (config.provider === "openrouter") {
-      content = await callOpenRouter(config.apiKey, config.model, userPrompt);
+      content = await callMistral(config.apiKey, config.model, DRAFT_PROMPT, userPrompt);
+    } else {
+      content = await callOpenRouter(config.apiKey, config.model, DRAFT_PROMPT, userPrompt);
     }
     return { content };
   } catch (err) {
@@ -168,7 +175,39 @@ export async function callAgent(
   }
 }
 
-// ─── Prompt de usuario ────────────────────────────────────────────────────────
+// ─── Agente maestro fusionador (fase 3) ──────────────────────────────────────
+// Usa Mistral Large si hay key de Mistral, sino DeepSeek V3 via OpenRouter
+
+export async function callMasterAgent(
+  apiKeys: { mistral: string; openrouter: string },
+  drafts: { agentName: string; content: string }[]
+): Promise<LLMResponse> {
+  const validDrafts = drafts.filter(d => d.content && d.content.length > 100);
+  if (validDrafts.length === 0) return { content: "", error: "No hay borradores válidos para fusionar" };
+  if (validDrafts.length === 1) return { content: validDrafts[0].content }; // solo uno, no hace falta fusionar
+
+  const userPrompt = validDrafts
+    .map((d, i) => `=== BORRADOR ${i + 1} (${d.agentName}) ===\n\n${d.content}`)
+    .join("\n\n" + "─".repeat(60) + "\n\n");
+
+  try {
+    // Mistral Large es el más potente disponible con free tier
+    if (apiKeys.mistral) {
+      const content = await callMistral(apiKeys.mistral, "mistral-large-latest", MERGE_PROMPT, userPrompt);
+      if (content.length > 100) return { content };
+    }
+    // Fallback: DeepSeek V3 via OpenRouter (también muy capaz)
+    if (apiKeys.openrouter) {
+      const content = await callOpenRouter(apiKeys.openrouter, "deepseek/deepseek-chat-v3-0324:free", MERGE_PROMPT, userPrompt);
+      if (content.length > 100) return { content };
+    }
+    return { content: "", error: "No se pudo generar el recurso definitivo" };
+  } catch (err) {
+    return { content: "", error: err instanceof Error ? err.message : "Error en fusión" };
+  }
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 export function buildUserPrompt(
   parsedMultaText: string,
@@ -190,8 +229,6 @@ export function buildUserPrompt(
   prompt += `Con todos estos datos, redacta el recurso administrativo completo y profesional.`;
   return prompt;
 }
-
-// ─── Instrucciones de presentación ───────────────────────────────────────────
 
 export function generateInstructions(): string {
   return `INSTRUCCIONES PARA PRESENTAR EL RECURSO
