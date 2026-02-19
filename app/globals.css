@@ -1,0 +1,127 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Crimson+Text:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-display: 'Playfair Display', Georgia, serif;
+  --font-body: 'Crimson Text', Georgia, serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: #0a0a0f;
+  color: #f9f6ef;
+  font-family: var(--font-body);
+  font-size: 18px;
+  line-height: 1.7;
+  overflow-x: hidden;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #0a0a0f; }
+::-webkit-scrollbar-thumb { background: #44445a; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #c9a84c; }
+
+/* Selection */
+::selection { background: #c9a84c30; color: #e8cc7a; }
+
+/* Noise texture overlay */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0.4;
+}
+
+/* Gold gradient text utility */
+.text-gold-gradient {
+  background: linear-gradient(135deg, #e8cc7a, #c9a84c, #9a7530);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Animated border */
+.border-gold-animated {
+  position: relative;
+}
+.border-gold-animated::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, #e8cc7a40, #c9a84c, #e8cc7a40);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* Card styles */
+.card-dark {
+  background: linear-gradient(135deg, #111118, #1a1a24);
+  border: 1px solid #2a2a38;
+}
+
+.card-dark:hover {
+  border-color: #44445a;
+}
+
+/* Drop zone */
+.dropzone-active {
+  border-color: #c9a84c !important;
+  background: #c9a84c08 !important;
+}
+
+/* Shimmer loading */
+.shimmer {
+  background: linear-gradient(90deg, #1a1a24 25%, #2a2a38 50%, #1a1a24 75%);
+  background-size: 200% 100%;
+  animation: shimmer 2s infinite;
+}
+
+/* Step indicators */
+.step-active .step-dot {
+  background: #c9a84c;
+  box-shadow: 0 0 20px #c9a84c60;
+}
+
+.step-done .step-dot {
+  background: #44445a;
+}
+
+/* Agent status */
+.agent-thinking {
+  animation: pulse-slow 2s infinite;
+}
+
+/* Prose for generated content */
+.prose-legal {
+  font-family: var(--font-body);
+  font-size: 17px;
+  line-height: 1.8;
+  color: #e8e8ef;
+}
+
+.prose-legal h1, .prose-legal h2, .prose-legal h3 {
+  font-family: var(--font-display);
+  color: #f9f6ef;
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+}
+
+.prose-legal p {
+  margin-bottom: 1em;
+}
