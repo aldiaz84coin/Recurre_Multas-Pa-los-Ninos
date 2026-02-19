@@ -65,7 +65,7 @@ export default function HomePage() {
         <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full border mb-8"
           style={{ borderColor: "#c9a84c30", background: "#c9a84c08", color: "#e8cc7a", fontFamily: "JetBrains Mono, monospace", fontSize: "12px" }}>
           <Flame className="w-3.5 h-3.5" style={{ color: "#c9a84c" }} />
-          Hecho por amigos, para amigos · 100% gratuito
+          Hecho por amigos, para amigos · 100% libre de orejas
         </div>
 
         {/* Main title */}
@@ -81,7 +81,7 @@ export default function HomePage() {
 
         {/* Subtitle personal */}
         <p className="text-xl max-w-2xl mx-auto mb-6 opacity-80" style={{ fontFamily: "Crimson Text, serif", lineHeight: "1.7" }}>
-          Hartos de que nos sangren a multas, hicimos esto. Sube la foto de tu multa y tres inteligencias artificiales
+          Hartos de orejazos y que nos sangren a multas, para que tengamos más para birra, os he hecho esto chavales . Sube la foto de tu multa y tres inteligencias artificiales
           te redactan el recurso administrativo en segundos.
         </p>
         <p className="text-base max-w-xl mx-auto mb-12 opacity-50" style={{ fontFamily: "Crimson Text, serif" }}>
@@ -98,7 +98,7 @@ export default function HomePage() {
               fontFamily: "Playfair Display, serif",
               boxShadow: "0 0 40px #c9a84c25",
             }}>
-            Recurrir mi multa ahora
+            Recurrir mi oreja ahora
             <ArrowRight className="w-5 h-5" />
           </Link>
         </div>
@@ -123,7 +123,7 @@ export default function HomePage() {
             Resulta que sí. Muchas veces. Y ahora tenemos IA para hacerlo en 2 minutos.
           </p>
           <p className="mt-4 opacity-50 text-sm" style={{ fontFamily: "JetBrains Mono, monospace" }}>
-            — El grupo de WhatsApp que se rebeló
+            — El grupo que se rebeló
           </p>
         </div>
       </section>
