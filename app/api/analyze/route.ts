@@ -145,6 +145,7 @@ async function parseDocumentWithLlamaVision(
 function getServerApiKeys() {
   return {
     mistral: process.env.MISTRAL_API_KEY || "",
+    // gemini eliminado: rate limits demasiado bajos en free tier
     gemini: process.env.GEMINI_API_KEY || "",
     openrouter: process.env.OPENROUTER_API_KEY || "",
   };
