@@ -1,25 +1,36 @@
 /**
  * app/api/test-agent/route.ts
- * Tests a single agent connection server-side (avoids CORS issues)
  */
-
 import { NextRequest, NextResponse } from "next/server";
 
-export const maxDuration = 15;
+export const maxDuration = 20;
 
 export async function POST(req: NextRequest) {
+  let body: { provider?: string; model?: string; apiKey?: string; baseUrl?: string } = {};
+
   try {
-    const { provider, model, apiKey, baseUrl } = await req.json();
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ ok: false, message: "Request body inválido" }, { status: 400 });
+  }
 
-    if (!apiKey) {
-      return NextResponse.json({ ok: false, message: "Sin API key" });
-    }
+  const { provider, model, apiKey, baseUrl } = body;
 
-    const start = Date.now();
+  if (!apiKey || !apiKey.trim()) {
+    return NextResponse.json({ ok: false, message: "Sin API key configurada" });
+  }
 
+  if (!provider || !model) {
+    return NextResponse.json({ ok: false, message: "Faltan provider o model" });
+  }
+
+  const start = Date.now();
+
+  try {
     if (provider === "gemini") {
       const m = model || "gemini-1.5-flash";
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${apiKey}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${apiKey.trim()}`;
+
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -28,26 +39,37 @@ export async function POST(req: NextRequest) {
           generationConfig: { maxOutputTokens: 5, temperature: 0 },
         }),
       });
+
       const latency = Date.now() - start;
+
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        const msg = err?.error?.message || `HTTP ${res.status}`;
+        const errBody = await res.json().catch(() => ({}));
+        const msg =
+          errBody?.error?.message ||
+          errBody?.error?.status ||
+          `HTTP ${res.status} ${res.statusText}`;
         return NextResponse.json({ ok: false, message: msg, latency });
       }
+
       return NextResponse.json({ ok: true, message: `Conectado · ${latency}ms`, latency });
     }
 
-    // OpenAI-compatible (Groq, OpenRouter, OpenAI, custom)
-    const base = baseUrl || "https://api.openai.com/v1";
+    // OpenAI-compatible: Groq, OpenRouter, OpenAI, custom
+    const base = (baseUrl || "https://api.openai.com/v1").replace(/\/$/, "");
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey.trim()}`,
+    };
+
+    if (provider === "openrouter") {
+      headers["HTTP-Referer"] = "https://recursapp.vercel.app";
+      headers["X-Title"] = "RecursApp";
+    }
+
     const res = await fetch(`${base}/chat/completions`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-        ...(provider === "openrouter"
-          ? { "HTTP-Referer": "https://recursapp.vercel.app", "X-Title": "RecursApp" }
-          : {}),
-      },
+      headers,
       body: JSON.stringify({
         model,
         messages: [{ role: "user", content: "Reply with: OK" }],
@@ -55,15 +77,28 @@ export async function POST(req: NextRequest) {
         temperature: 0,
       }),
     });
+
     const latency = Date.now() - start;
+
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      const msg = err?.error?.message || `HTTP ${res.status}`;
+      const errBody = await res.json().catch(() => ({}));
+      const msg =
+        errBody?.error?.message ||
+        errBody?.error?.code ||
+        `HTTP ${res.status} ${res.statusText}`;
       return NextResponse.json({ ok: false, message: msg, latency });
     }
+
     return NextResponse.json({ ok: true, message: `Conectado · ${latency}ms`, latency });
+
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "Error de red";
-    return NextResponse.json({ ok: false, message: msg, latency: 0 });
+    const latency = Date.now() - start;
+    const msg = err instanceof Error ? err.message : "Error desconocido";
+    return NextResponse.json({ ok: false, message: `Error de red: ${msg}`, latency });
   }
+}
+
+// Return 405 for non-POST with a clear message
+export async function GET() {
+  return NextResponse.json({ error: "Usa POST" }, { status: 405 });
 }
