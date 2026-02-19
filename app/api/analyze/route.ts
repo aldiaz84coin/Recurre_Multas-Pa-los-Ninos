@@ -28,7 +28,7 @@ async function extractTextFromFile(base64: string, mimeType: string, fileName: s
 // Las keys se leen siempre del servidor — el cliente nunca las ve ni las envía
 function getServerApiKeys() {
   return {
-    groq: process.env.GROQ_API_KEY || "",
+    mistral: process.env.MISTRAL_API_KEY || "",
     gemini: process.env.GEMINI_API_KEY || "",
     openrouter: process.env.OPENROUTER_API_KEY || "",
   };
@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
     }
 
     const apiKeys = getServerApiKeys();
-    const hasAnyKey = apiKeys.groq || apiKeys.gemini || apiKeys.openrouter;
+    const hasAnyKey = apiKeys.mistral || apiKeys.gemini || apiKeys.openrouter;
     if (!hasAnyKey) {
       return NextResponse.json({ error: "No hay API keys configuradas en el servidor. Contacta al administrador." }, { status: 500 });
     }
