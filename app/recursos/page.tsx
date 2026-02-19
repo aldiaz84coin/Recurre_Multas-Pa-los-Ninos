@@ -2,7 +2,10 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Scale, ArrowLeft, Upload, Plus, X, Zap, FileText, Download, AlertCircle, CheckCircle, Clock, ChevronDown, ChevronUp } from "lucide-react";
+import {
+  Scale, ArrowLeft, Upload, Plus, X, Zap, FileText,
+  Download, AlertCircle, CheckCircle, Clock, ChevronDown, ChevronUp, Star
+} from "lucide-react";
 import toast from "react-hot-toast";
 import { useDropzone } from "react-dropzone";
 
@@ -31,10 +34,12 @@ export default function RecursosPage() {
   const [additionalContext, setAdditionalContext] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [agentResults, setAgentResults] = useState<AgentResult[]>([]);
+  const [masterRecurso, setMasterRecurso] = useState("");
+  const [masterError, setMasterError] = useState("");
   const [instructions, setInstructions] = useState("");
-  const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
   const [parsedText, setParsedText] = useState("");
   const [showParsed, setShowParsed] = useState(false);
+  const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
 
   const { getRootProps: getMultaProps, getInputProps: getMultaInputProps, isDragActive: isMultaDrag } = useDropzone({
     accept: { "application/pdf": [".pdf"], "image/*": [".jpg", ".jpeg", ".png", ".webp"] },
@@ -43,9 +48,7 @@ export default function RecursosPage() {
       if (files[0]) {
         const f = files[0];
         const reader = new FileReader();
-        reader.onload = () => {
-          setMultaFile({ file: f, name: f.name, type: f.type, preview: f.type.startsWith("image/") ? reader.result as string : undefined });
-        };
+        reader.onload = () => setMultaFile({ file: f, name: f.name, type: f.type, preview: f.type.startsWith("image/") ? reader.result as string : undefined });
         reader.readAsDataURL(f);
       }
     },
@@ -53,9 +56,7 @@ export default function RecursosPage() {
 
   const { getRootProps: getSupportProps, getInputProps: getSupportInputProps, isDragActive: isSupportDrag } = useDropzone({
     accept: { "application/pdf": [".pdf"], "image/*": [], "text/*": [".txt"] },
-    onDrop: (files) => {
-      setSupportFiles(prev => [...prev, ...files.map(f => ({ file: f, name: f.name, type: f.type, context: "" }))]);
-    },
+    onDrop: (files) => setSupportFiles(prev => [...prev, ...files.map(f => ({ file: f, name: f.name, type: f.type, context: "" }))]),
   });
 
   const fileToBase64 = (file: File): Promise<string> =>
@@ -68,21 +69,13 @@ export default function RecursosPage() {
 
   const handleAnalyze = async () => {
     if (!multaFile) { toast.error("Sube el documento de la multa primero"); return; }
-
     setIsAnalyzing(true);
     setStep(3);
-
     try {
       const multaBase64 = await fileToBase64(multaFile.file);
       const supportFilesData = await Promise.all(
-        supportFiles.map(async sf => ({
-          name: sf.name,
-          type: sf.type,
-          context: sf.context || "",
-          base64: await fileToBase64(sf.file),
-        }))
+        supportFiles.map(async sf => ({ name: sf.name, type: sf.type, context: sf.context || "", base64: await fileToBase64(sf.file) }))
       );
-
       const response = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -90,22 +83,18 @@ export default function RecursosPage() {
           multaFile: { name: multaFile.name, type: multaFile.type, base64: multaBase64 },
           supportFiles: supportFilesData,
           additionalContext,
-          // Las API keys las lee el servidor desde variables de entorno
         }),
       });
-
       if (!response.ok) {
         const err = await response.json();
         throw new Error(err.error || "Error al analizar");
       }
-
       const data = await response.json();
-      setAgentResults(data.agentResults);
-      setInstructions(data.instructions);
+      setAgentResults(data.agentResults || []);
+      setMasterRecurso(data.masterRecurso || "");
+      setMasterError(data.masterError || "");
+      setInstructions(data.instructions || "");
       if (data.parsedText) setParsedText(data.parsedText);
-      // Auto-expand first successful result
-      const first = data.agentResults.find((r: AgentResult) => r.status === "done");
-      if (first) setExpandedAgent(first.agentId);
       setStep(4);
     } catch (err) {
       toast.error("Error: " + (err instanceof Error ? err.message : "Desconocido"));
@@ -114,27 +103,27 @@ export default function RecursosPage() {
     setIsAnalyzing(false);
   };
 
-  const handleDownloadDoc = async (agentId: string) => {
-    const agent = agentResults.find(r => r.agentId === agentId);
-    if (!agent?.content) return;
+  const handleDownload = async (content: string, filename: string) => {
     try {
       const res = await fetch("/api/generate-doc", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: agent.content, instructions }),
+        body: JSON.stringify({ content, instructions }),
       });
       if (!res.ok) throw new Error("Error generando documento");
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = url;
-      a.download = `recurso-${agentId}-${Date.now()}.docx`;
-      a.click();
+      a.href = url; a.download = filename; a.click();
       URL.revokeObjectURL(url);
       toast.success("Documento descargado");
-    } catch {
-      toast.error("Error al generar el documento");
-    }
+    } catch { toast.error("Error al generar el documento"); }
+  };
+
+  const handleReset = () => {
+    setStep(1); setMultaFile(null); setSupportFiles([]); setAdditionalContext("");
+    setAgentResults([]); setMasterRecurso(""); setMasterError("");
+    setInstructions(""); setParsedText(""); setShowParsed(false); setExpandedAgent(null);
   };
 
   const successCount = agentResults.filter(r => r.status === "done").length;
@@ -161,7 +150,7 @@ export default function RecursosPage() {
         </Link>
       </nav>
 
-      {/* Steps */}
+      {/* Steps indicator */}
       <div className="flex items-center justify-center gap-0 px-8 py-8">
         {[{ n: 1, label: "Multa" }, { n: 2, label: "Contexto" }, { n: 3, label: "Analizando" }, { n: 4, label: "Recursos" }].map(({ n, label }, i) => (
           <div key={n} className="flex items-center">
@@ -187,12 +176,11 @@ export default function RecursosPage() {
 
       <div className="max-w-3xl mx-auto px-8 pb-20">
 
-        {/* STEP 1: Upload multa */}
+        {/* STEP 1 */}
         {step === 1 && (
           <div className="animate-fade-up">
             <h1 className="font-display text-4xl mb-2">Sube tu multa</h1>
             <p className="opacity-60 mb-8">PDF o imagen de la notificación.</p>
-
             <div {...getMultaProps()}
               className={`border-2 border-dashed rounded-sm p-12 text-center cursor-pointer transition-all ${isMultaDrag ? "dropzone-active" : ""}`}
               style={{ borderColor: multaFile ? "#c9a84c" : "#2a2a38", background: multaFile ? "#c9a84c08" : "#111118" }}>
@@ -201,9 +189,7 @@ export default function RecursosPage() {
                 <div className="flex flex-col items-center gap-4">
                   {multaFile.preview
                     ? <img src={multaFile.preview} alt="multa" className="max-h-48 rounded object-contain" />
-                    : <div className="w-16 h-16 rounded-full flex items-center justify-center" style={{ background: "#c9a84c20" }}>
-                        <FileText className="w-8 h-8" style={{ color: "#c9a84c" }} />
-                      </div>
+                    : <div className="w-16 h-16 rounded-full flex items-center justify-center" style={{ background: "#c9a84c20" }}><FileText className="w-8 h-8" style={{ color: "#c9a84c" }} /></div>
                   }
                   <div>
                     <p className="font-semibold" style={{ color: "#e8cc7a" }}>{multaFile.name}</p>
@@ -225,7 +211,6 @@ export default function RecursosPage() {
                 </div>
               )}
             </div>
-
             {multaFile && (
               <button onClick={() => setStep(2)} className="mt-6 w-full py-4 rounded-sm font-semibold text-lg transition-all hover:scale-[1.01]"
                 style={{ background: "linear-gradient(135deg, #c9a84c, #9a7530)", color: "#0a0a0f", fontFamily: "Playfair Display, serif" }}>
@@ -235,7 +220,7 @@ export default function RecursosPage() {
           </div>
         )}
 
-        {/* STEP 2: Context */}
+        {/* STEP 2 */}
         {step === 2 && (
           <div className="animate-fade-up">
             <div className="flex items-center gap-4 mb-2">
@@ -243,18 +228,15 @@ export default function RecursosPage() {
               <h1 className="font-display text-4xl">Contexto adicional</h1>
             </div>
             <p className="opacity-60 mb-8 ml-9">Opcional pero recomendado.</p>
-
-            {/* Support files */}
             <div {...getSupportProps()}
               className={`border-2 border-dashed rounded-sm p-8 text-center cursor-pointer transition-all mb-6 ${isSupportDrag ? "dropzone-active" : ""}`}
               style={{ borderColor: "#2a2a38", background: "#111118" }}>
               <input {...getSupportInputProps()} />
               <div className="flex flex-col items-center gap-3">
                 <Plus className="w-8 h-8 opacity-30" />
-                <p className="opacity-50 text-sm">Añadir documentación de apoyo (legislación, fotos, contratos…)</p>
+                <p className="opacity-50 text-sm">Añadir documentación de apoyo (legislación, fotos…)</p>
               </div>
             </div>
-
             {supportFiles.length > 0 && (
               <div className="space-y-3 mb-6">
                 {supportFiles.map((sf, idx) => (
@@ -263,9 +245,7 @@ export default function RecursosPage() {
                       <span className="text-sm font-semibold truncate max-w-xs flex items-center gap-2">
                         <FileText className="w-4 h-4 flex-shrink-0" style={{ color: "#c9a84c" }} /> {sf.name}
                       </span>
-                      <button onClick={() => setSupportFiles(p => p.filter((_, i) => i !== idx))} className="opacity-40 hover:opacity-100">
-                        <X className="w-4 h-4" />
-                      </button>
+                      <button onClick={() => setSupportFiles(p => p.filter((_, i) => i !== idx))} className="opacity-40 hover:opacity-100"><X className="w-4 h-4" /></button>
                     </div>
                     <input type="text" value={sf.context || ""} onChange={e => setSupportFiles(p => p.map((f, i) => i === idx ? { ...f, context: e.target.value } : f))}
                       placeholder="Describe brevemente este documento…"
@@ -275,22 +255,19 @@ export default function RecursosPage() {
                 ))}
               </div>
             )}
-
             <div className="mb-8">
               <label className="block text-xs mb-2 uppercase tracking-wider opacity-50" style={{ fontFamily: "JetBrains Mono, monospace" }}>
                 Contexto adicional (opcional)
               </label>
               <textarea value={additionalContext} onChange={e => setAdditionalContext(e.target.value)} rows={4}
-                placeholder="Ej: 'La señal estaba obstruida por vegetación', 'La multa fue impuesta fuera del horario indicado'…"
+                placeholder="Ej: 'La señal estaba obstruida', 'La multa fue fuera del horario indicado'…"
                 className="w-full px-4 py-3 rounded-sm text-base focus:outline-none resize-none"
                 style={{ background: "#111118", border: "1px solid #2a2a38", color: "#f9f6ef", fontFamily: "Crimson Text, serif", fontSize: "17px" }} />
             </div>
-
             <button onClick={handleAnalyze}
               className="w-full py-4 rounded-sm font-semibold text-lg transition-all hover:scale-[1.01] flex items-center justify-center gap-3"
               style={{ background: "linear-gradient(135deg, #c9a84c, #9a7530)", color: "#0a0a0f", fontFamily: "Playfair Display, serif", boxShadow: "0 0 40px #c9a84c20" }}>
-              <Zap className="w-5 h-5" />
-              Generar recursos con IA
+              <Zap className="w-5 h-5" /> Generar recursos con IA
             </button>
           </div>
         )}
@@ -298,23 +275,32 @@ export default function RecursosPage() {
         {/* STEP 3: Analyzing */}
         {step === 3 && (
           <div className="animate-fade-up">
-            <h1 className="font-display text-4xl mb-2">Generando recursos…</h1>
-            <p className="opacity-60 mb-8">Cada IA redacta su propio recurso de forma independiente.</p>
+            <h1 className="font-display text-4xl mb-2">Trabajando…</h1>
+            <p className="opacity-60 mb-8">4 fases: parseo → 3 borradores → recurso definitivo.</p>
             <div className="space-y-4">
-              {["Groq · Llama 3.3 70B", "Google Gemini 1.5 Flash", "OpenRouter · Llama 3.3 70B"].map((label, i) => (
-                <div key={i} className="card-dark rounded-sm p-6" style={{ borderColor: "#2a2a38" }}>
+              {[
+                { label: "Leyendo el documento", sublabel: "OpenRouter · parseo visual", color: "#c9a84c" },
+                { label: "Agente Mistral Small", sublabel: "redactando borrador 1", color: "#f97316" },
+                { label: "Agente Llama 3.3 70B", sublabel: "redactando borrador 2", color: "#8b5cf6" },
+                { label: "Agente DeepSeek V3", sublabel: "redactando borrador 3", color: "#06b6d4" },
+                { label: "Agente Maestro", sublabel: "Mistral Large fusionando los 3 borradores", color: "#e8cc7a" },
+              ].map((item, i) => (
+                <div key={i} className="card-dark rounded-sm p-5" style={{ borderColor: "#2a2a38" }}>
                   <div className="flex items-center gap-3 mb-3">
-                    <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold"
-                      style={{ background: "#1a1a24", border: "1px solid #2a2a38", color: "#c9a84c", fontFamily: "JetBrains Mono, monospace" }}>
-                      {i + 1}
+                    <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
+                      style={{ background: `${item.color}20`, border: `1px solid ${item.color}40`, color: item.color, fontFamily: "JetBrains Mono, monospace" }}>
+                      {i === 4 ? "★" : i + 1}
                     </div>
-                    <span className="font-display">{label}</span>
-                    <div className="flex items-center gap-2 ml-auto text-xs" style={{ color: "#c9a84c", fontFamily: "JetBrains Mono, monospace", fontSize: "12px" }}>
-                      <Clock className="w-3.5 h-3.5 animate-spin" /> redactando…
+                    <div>
+                      <div className="font-display">{item.label}</div>
+                      <div className="text-xs opacity-50" style={{ fontFamily: "JetBrains Mono, monospace" }}>{item.sublabel}</div>
+                    </div>
+                    <div className="ml-auto flex items-center gap-2 text-xs" style={{ color: item.color, fontFamily: "JetBrains Mono, monospace", fontSize: "11px" }}>
+                      <Clock className="w-3.5 h-3.5 animate-spin" /> procesando…
                     </div>
                   </div>
-                  <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "#1a1a24" }}>
-                    <div className="h-full rounded-full shimmer" style={{ width: "70%" }} />
+                  <div className="h-1 rounded-full overflow-hidden" style={{ background: "#1a1a24" }}>
+                    <div className="h-full rounded-full shimmer" style={{ width: "65%" }} />
                   </div>
                 </div>
               ))}
@@ -329,28 +315,69 @@ export default function RecursosPage() {
               <div className="flex items-center gap-2 mb-2">
                 <CheckCircle className="w-5 h-5" style={{ color: "#4ade80" }} />
                 <span className="text-sm" style={{ color: "#4ade80", fontFamily: "JetBrains Mono, monospace", fontSize: "12px" }}>
-                  {successCount} RECURSO{successCount !== 1 ? "S" : ""} GENERADO{successCount !== 1 ? "S" : ""}
+                  {successCount} BORRADOR{successCount !== 1 ? "ES" : ""} + RECURSO DEFINITIVO GENERADOS
                 </span>
               </div>
-              <h1 className="font-display text-4xl">Elige tu recurso</h1>
-              <p className="opacity-60 mt-2" style={{ fontFamily: "Crimson Text, serif", fontSize: "17px" }}>
-                Cada IA ha redactado su versión independiente. Compara y descarga la que más te convenza.
-              </p>
+              <h1 className="font-display text-4xl">Tu recurso está listo</h1>
             </div>
 
-            {/* Parsed document data */}
+            {/* ── RECURSO DEFINITIVO (destacado) ── */}
+            <div className="rounded-sm overflow-hidden mb-8"
+              style={{ border: "2px solid #c9a84c60", background: "linear-gradient(160deg, #1a1508, #1a1a24)", boxShadow: "0 0 40px #c9a84c15" }}>
+              {/* Header */}
+              <div className="px-6 py-5 flex items-center justify-between"
+                style={{ borderBottom: "1px solid #c9a84c30", background: "#c9a84c08" }}>
+                <div className="flex items-center gap-4">
+                  <div className="w-10 h-10 rounded-full flex items-center justify-center"
+                    style={{ background: "linear-gradient(135deg, #c9a84c, #9a7530)", boxShadow: "0 0 20px #c9a84c40" }}>
+                    <Star className="w-5 h-5" style={{ color: "#0a0a0f" }} />
+                  </div>
+                  <div>
+                    <div className="font-display text-xl" style={{ color: "#e8cc7a" }}>Recurso Definitivo</div>
+                    <div className="text-xs mt-0.5" style={{ color: "#c9a84c", fontFamily: "JetBrains Mono, monospace" }}>
+                      Fusión de {successCount} borradores · Mistral Large
+                    </div>
+                  </div>
+                </div>
+                {masterRecurso && (
+                  <button
+                    onClick={() => handleDownload(masterRecurso, `recurso-DEFINITIVO-${Date.now()}.docx`)}
+                    className="flex items-center gap-2 px-5 py-2.5 rounded-sm font-semibold transition-all hover:scale-[1.02]"
+                    style={{ background: "linear-gradient(135deg, #c9a84c, #9a7530)", color: "#0a0a0f", fontFamily: "Crimson Text, serif", fontSize: "16px", boxShadow: "0 0 20px #c9a84c30" }}>
+                    <Download className="w-4 h-4" /> Descargar .docx
+                  </button>
+                )}
+              </div>
+
+              {/* Content */}
+              {masterRecurso ? (
+                <div className="px-6 py-6">
+                  <div className="prose-legal whitespace-pre-wrap max-h-[600px] overflow-y-auto pr-2"
+                    style={{ fontFamily: "Crimson Text, serif", fontSize: "16px", color: "#e8e8ef", lineHeight: "1.8" }}>
+                    {masterRecurso}
+                  </div>
+                </div>
+              ) : (
+                <div className="px-6 py-8 text-center">
+                  <AlertCircle className="w-8 h-8 mx-auto mb-3" style={{ color: "#f87171" }} />
+                  <p style={{ color: "#f87171", fontFamily: "JetBrains Mono, monospace", fontSize: "13px" }}>
+                    {masterError || "No se pudo generar el recurso definitivo"}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* ── Datos parseados ── */}
             {parsedText && (
-              <div className="rounded-sm overflow-hidden mb-6"
-                style={{ border: "1px solid #2a2a38", background: "#111118" }}>
-                <button
-                  onClick={() => setShowParsed(p => !p)}
+              <div className="rounded-sm overflow-hidden mb-6" style={{ border: "1px solid #2a2a38", background: "#111118" }}>
+                <button onClick={() => setShowParsed(p => !p)}
                   className="w-full flex items-center justify-between px-6 py-4 hover:opacity-80 transition-opacity">
                   <div className="flex items-center gap-3">
                     <FileText className="w-4 h-4" style={{ color: "#c9a84c" }} />
                     <span className="font-display text-base">Datos extraídos del documento</span>
                     <span className="text-xs px-2 py-0.5 rounded"
                       style={{ background: "#4ade8015", color: "#4ade80", border: "1px solid #4ade8030", fontFamily: "JetBrains Mono, monospace" }}>
-                      ✓ Parseado correctamente
+                      ✓ Parseado
                     </span>
                   </div>
                   {showParsed ? <ChevronUp className="w-4 h-4 opacity-40" /> : <ChevronDown className="w-4 h-4 opacity-40" />}
@@ -366,83 +393,66 @@ export default function RecursosPage() {
               </div>
             )}
 
-                        <div className="space-y-4 mb-10">
-              {agentResults.map((agent) => (
-                <div key={agent.agentId} className="rounded-sm overflow-hidden transition-all"
-                  style={{
-                    border: `1px solid ${agent.status === "done" ? `${agent.color}30` : "#2a2a38"}`,
-                    background: "linear-gradient(160deg, #111118, #1a1a24)",
-                  }}>
-                  {/* Agent header */}
-                  <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: "#1e1e2a" }}>
-                    <div className="flex items-center gap-4">
-                      <div className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm"
-                        style={{ background: `${agent.color}18`, border: `1px solid ${agent.color}35`, color: agent.color, fontFamily: "JetBrains Mono, monospace" }}>
-                        {agent.agentId === "agent-groq" ? "G" : agent.agentId === "agent-gemini" ? "AI" : "OR"}
+            {/* ── Borradores individuales ── */}
+            <div className="mb-6">
+              <p className="text-xs uppercase tracking-widest mb-4 opacity-40" style={{ fontFamily: "JetBrains Mono, monospace" }}>
+                Borradores individuales
+              </p>
+              <div className="space-y-3">
+                {agentResults.map((agent) => (
+                  <div key={agent.agentId} className="rounded-sm overflow-hidden"
+                    style={{ border: `1px solid ${agent.status === "done" ? `${agent.color}25` : "#2a2a38"}`, background: "#111118" }}>
+                    <div className="flex items-center justify-between px-5 py-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
+                          style={{ background: `${agent.color}18`, border: `1px solid ${agent.color}35`, color: agent.color, fontFamily: "JetBrains Mono, monospace" }}>
+                          {agent.agentId === "agent-mistral" ? "M" : agent.agentId === "agent-openrouter-1" ? "L" : "D"}
+                        </div>
+                        <div>
+                          <div className="text-sm font-semibold" style={{ fontFamily: "Crimson Text, serif", fontSize: "16px" }}>{agent.label}</div>
+                          {agent.status === "done" && (
+                            <div className="text-xs" style={{ color: "#4ade80", fontFamily: "JetBrains Mono, monospace" }}>✓ {agent.content.length} chars</div>
+                          )}
+                          {agent.status === "error" && (
+                            <div className="text-xs truncate max-w-xs" style={{ color: "#f87171", fontFamily: "JetBrains Mono, monospace" }}>{agent.error}</div>
+                          )}
+                          {agent.status === "skipped" && (
+                            <div className="text-xs" style={{ color: "#666688", fontFamily: "JetBrains Mono, monospace" }}>Sin API key</div>
+                          )}
+                        </div>
                       </div>
-                      <div>
-                        <div className="font-display text-lg">{agent.label}</div>
+                      <div className="flex items-center gap-2">
                         {agent.status === "done" && (
-                          <div className="text-xs mt-0.5" style={{ color: "#4ade80", fontFamily: "JetBrains Mono, monospace" }}>
-                            ✓ {agent.content.length} caracteres
-                          </div>
-                        )}
-                        {agent.status === "error" && (
-                          <div className="text-xs mt-0.5" style={{ color: "#f87171", fontFamily: "JetBrains Mono, monospace" }}>
-                            ✗ {agent.error}
-                          </div>
-                        )}
-                        {agent.status === "skipped" && (
-                          <div className="text-xs mt-0.5" style={{ color: "#666688", fontFamily: "JetBrains Mono, monospace" }}>
-                            Sin API key configurada
-                          </div>
+                          <>
+                            <button onClick={() => handleDownload(agent.content, `recurso-${agent.agentId}-${Date.now()}.docx`)}
+                              className="flex items-center gap-1 px-3 py-1.5 rounded text-xs border transition-all hover:opacity-100 opacity-60"
+                              style={{ borderColor: `${agent.color}40`, color: agent.color, fontFamily: "JetBrains Mono, monospace" }}>
+                              <Download className="w-3 h-3" /> .docx
+                            </button>
+                            <button onClick={() => setExpandedAgent(expandedAgent === agent.agentId ? null : agent.agentId)}
+                              className="p-1.5 opacity-40 hover:opacity-100 transition-opacity">
+                              {expandedAgent === agent.agentId ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                            </button>
+                          </>
                         )}
                       </div>
                     </div>
-                    <div className="flex items-center gap-3">
-                      {agent.status === "done" && (
-                        <>
-                          <button onClick={() => handleDownloadDoc(agent.agentId)}
-                            className="flex items-center gap-1.5 px-4 py-2 rounded-sm text-sm font-semibold transition-all hover:scale-[1.02]"
-                            style={{ background: `linear-gradient(135deg, ${agent.color}, ${agent.color}99)`, color: "#0a0a0f", fontFamily: "Crimson Text, serif", fontSize: "15px" }}>
-                            <Download className="w-4 h-4" /> Descargar .docx
-                          </button>
-                          <button onClick={() => setExpandedAgent(expandedAgent === agent.agentId ? null : agent.agentId)}
-                            className="p-2 opacity-50 hover:opacity-100 transition-opacity">
-                            {expandedAgent === agent.agentId ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-                          </button>
-                        </>
-                      )}
-                      {agent.status === "error" && (
-                        <AlertCircle className="w-5 h-5" style={{ color: "#f87171" }} />
-                      )}
-                      {agent.status === "skipped" && (
-                        <span className="text-xs px-3 py-1.5 rounded"
-                          style={{ background: "#1a1a24", border: "1px solid #2a2a38", color: "#44445a", fontFamily: "JetBrains Mono, monospace" }}>
-                          Omitido
-                        </span>
-                      )}
-                    </div>
+                    {expandedAgent === agent.agentId && agent.status === "done" && (
+                      <div className="px-5 pb-5 border-t" style={{ borderColor: "#1e1e2a" }}>
+                        <div className="mt-4 whitespace-pre-wrap max-h-96 overflow-y-auto text-sm leading-relaxed"
+                          style={{ fontFamily: "Crimson Text, serif", fontSize: "15px", color: "#b8b8c8" }}>
+                          {agent.content}
+                        </div>
+                      </div>
+                    )}
                   </div>
-
-                  {/* Expandable content */}
-                  {expandedAgent === agent.agentId && agent.status === "done" && (
-                    <div className="px-6 py-6 border-t" style={{ borderColor: "#1e1e2a" }}>
-                      <div className="prose-legal whitespace-pre-wrap max-h-[500px] overflow-y-auto pr-2 text-sm leading-relaxed"
-                        style={{ fontFamily: "Crimson Text, serif", fontSize: "16px", color: "#d8d8e8" }}>
-                        {agent.content}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
 
-            {/* Instructions */}
+            {/* ── Instrucciones ── */}
             <div className="rounded-sm p-8 mb-8" style={{ background: "#c9a84c08", border: "1px solid #c9a84c30" }}>
-              <h2 className="font-display text-2xl mb-4" style={{ color: "#e8cc7a" }}>
-                📋 Instrucciones de presentación
-              </h2>
+              <h2 className="font-display text-2xl mb-4" style={{ color: "#e8cc7a" }}>📋 Instrucciones de presentación</h2>
               <div className="whitespace-pre-wrap opacity-80" style={{ fontFamily: "Crimson Text, serif", fontSize: "16px", lineHeight: "1.8" }}>
                 {instructions}
               </div>
@@ -450,7 +460,7 @@ export default function RecursosPage() {
 
             {/* Reset */}
             <div className="flex justify-center">
-              <button onClick={() => { setStep(1); setMultaFile(null); setSupportFiles([]); setAdditionalContext(""); setAgentResults([]); setInstructions(""); setExpandedAgent(null); setParsedText(""); setShowParsed(false); }}
+              <button onClick={handleReset}
                 className="flex items-center gap-2 px-8 py-4 rounded-sm font-semibold text-lg border transition-all"
                 style={{ borderColor: "#2a2a38", color: "#9898b0", fontFamily: "Playfair Display, serif" }}>
                 Nueva multa
