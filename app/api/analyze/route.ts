@@ -1,7 +1,7 @@
 /**
  * app/api/analyze/route.ts
  *
- * FASE 1 — Parseo visual con Qwen2.5-VL-72B vía OpenRouter (OPENROUTER_API_KEY)
+ * FASE 1 — Parseo visual con Llama 3.2 11B Vision vía OpenRouter (OPENROUTER_API_KEY)
  *   · Modelo especializado en OCR y document parsing, completamente gratuito
  *   · Soporta imágenes y PDFs escaneados con visión nativa
  *   · Una sola key hace el parseo Y uno de los 3 agentes
@@ -54,7 +54,7 @@ Sé exhaustivo. Lee todo el documento. No inventes datos — solo extrae lo que 
 
 // ─── Fase 1: Parseo con Qwen2.5-VL via OpenRouter ────────────────────────────
 
-async function parseDocumentWithQwen(
+async function parseDocumentWithLlamaVision(
   openrouterApiKey: string,
   base64: string,
   mimeType: string,
@@ -78,7 +78,7 @@ async function parseDocumentWithQwen(
             "X-Title": "RecursApp",
           },
           body: JSON.stringify({
-            model: "qwen/qwen2.5-vl-72b-instruct:free",
+            model: "meta-llama/llama-3.2-11b-vision-instruct:free",
             messages: [
               {
                 role: "user",
@@ -110,7 +110,7 @@ async function parseDocumentWithQwen(
       "X-Title": "RecursApp",
     },
     body: JSON.stringify({
-      model: "qwen/qwen2.5-vl-72b-instruct:free",
+      model: "meta-llama/llama-3.2-11b-vision-instruct:free",
       messages: [
         {
           role: "user",
@@ -174,10 +174,10 @@ export async function POST(req: NextRequest) {
     }
 
     // ── FASE 1: Parsear el documento con Qwen2.5-VL via OpenRouter ───────────
-    console.log("Fase 1: parseando con Qwen2.5-VL-72B (OpenRouter)...");
+    console.log("Fase 1: parseando con Llama-3.2-11B-Vision (OpenRouter)...");
     let parsedText: string;
     try {
-      parsedText = await parseDocumentWithQwen(
+      parsedText = await parseDocumentWithLlamaVision(
         apiKeys.openrouter,
         multaFile.base64,
         multaFile.type,
