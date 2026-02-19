@@ -6,31 +6,19 @@ import { NextRequest, NextResponse } from "next/server";
 export const maxDuration = 20;
 
 export async function POST(req: NextRequest) {
-  let body: { provider?: string; model?: string; apiKey?: string; baseUrl?: string } = {};
-
   try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ ok: false, message: "Request body inválido" }, { status: 400 });
-  }
+    const { provider, model, apiKey, baseUrl } = await req.json();
 
-  const { provider, model, apiKey, baseUrl } = body;
+    if (!apiKey) {
+      return NextResponse.json({ ok: false, message: "Sin API key" });
+    }
 
-  if (!apiKey || !apiKey.trim()) {
-    return NextResponse.json({ ok: false, message: "Sin API key configurada" });
-  }
+    const start = Date.now();
 
-  if (!provider || !model) {
-    return NextResponse.json({ ok: false, message: "Faltan provider o model" });
-  }
-
-  const start = Date.now();
-
-  try {
+    // ── Gemini ────────────────────────────────────────────────────────────────
     if (provider === "gemini") {
       const m = model || "gemini-1.5-flash";
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${apiKey.trim()}`;
-
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${apiKey}`;
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -39,37 +27,48 @@ export async function POST(req: NextRequest) {
           generationConfig: { maxOutputTokens: 5, temperature: 0 },
         }),
       });
-
       const latency = Date.now() - start;
-
       if (!res.ok) {
-        const errBody = await res.json().catch(() => ({}));
-        const msg =
-          errBody?.error?.message ||
-          errBody?.error?.status ||
-          `HTTP ${res.status} ${res.statusText}`;
-        return NextResponse.json({ ok: false, message: msg, latency });
+        const err = await res.json().catch(() => ({}));
+        return NextResponse.json({ ok: false, message: err?.error?.message || `HTTP ${res.status}`, latency });
       }
-
       return NextResponse.json({ ok: true, message: `Conectado · ${latency}ms`, latency });
     }
 
-    // OpenAI-compatible: Groq, OpenRouter, OpenAI, custom
-    const base = (baseUrl || "https://api.openai.com/v1").replace(/\/$/, "");
-
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey.trim()}`,
-    };
-
+    // ── OpenRouter ────────────────────────────────────────────────────────────
     if (provider === "openrouter") {
-      headers["HTTP-Referer"] = "https://recursapp.vercel.app";
-      headers["X-Title"] = "RecursApp";
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`,
+          "HTTP-Referer": "https://recursapp.vercel.app",
+          "X-Title": "RecursApp",
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content: "Reply with: OK" }],
+          max_tokens: 5,
+          temperature: 0,
+        }),
+      });
+      const latency = Date.now() - start;
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        const msg = err?.error?.message || `HTTP ${res.status}`;
+        return NextResponse.json({ ok: false, message: msg, latency });
+      }
+      return NextResponse.json({ ok: true, message: `Conectado · ${latency}ms`, latency });
     }
 
+    // ── Groq / OpenAI / Custom ────────────────────────────────────────────────
+    const base = baseUrl || "https://api.openai.com/v1";
     const res = await fetch(`${base}/chat/completions`, {
       method: "POST",
-      headers,
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+      },
       body: JSON.stringify({
         model,
         messages: [{ role: "user", content: "Reply with: OK" }],
@@ -77,28 +76,18 @@ export async function POST(req: NextRequest) {
         temperature: 0,
       }),
     });
-
     const latency = Date.now() - start;
-
     if (!res.ok) {
-      const errBody = await res.json().catch(() => ({}));
-      const msg =
-        errBody?.error?.message ||
-        errBody?.error?.code ||
-        `HTTP ${res.status} ${res.statusText}`;
-      return NextResponse.json({ ok: false, message: msg, latency });
+      const err = await res.json().catch(() => ({}));
+      return NextResponse.json({ ok: false, message: err?.error?.message || `HTTP ${res.status}`, latency });
     }
-
     return NextResponse.json({ ok: true, message: `Conectado · ${latency}ms`, latency });
 
   } catch (err: unknown) {
-    const latency = Date.now() - start;
-    const msg = err instanceof Error ? err.message : "Error desconocido";
-    return NextResponse.json({ ok: false, message: `Error de red: ${msg}`, latency });
+    return NextResponse.json({
+      ok: false,
+      message: err instanceof Error ? err.message : "Error de red",
+      latency: 0,
+    });
   }
-}
-
-// Return 405 for non-POST with a clear message
-export async function GET() {
-  return NextResponse.json({ error: "Usa POST" }, { status: 405 });
 }
