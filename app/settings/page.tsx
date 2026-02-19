@@ -6,7 +6,6 @@ import { FIXED_AGENTS } from "@/lib/llm";
 
 const ENV_VARS: Record<string, string> = {
   mistral: "MISTRAL_API_KEY",
-  gemini: "GEMINI_API_KEY",
   openrouter: "OPENROUTER_API_KEY",
 };
 
@@ -48,7 +47,7 @@ export default function SettingsPage() {
                 <div className="flex items-center gap-4">
                   <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm"
                     style={{ background: `${agent.color}18`, border: `1px solid ${agent.color}40`, color: agent.color, fontFamily: "JetBrains Mono, monospace" }}>
-                    {agent.provider === "mistral" ? "M" : agent.provider === "gemini" ? "AI" : "OR"}
+                    {agent.provider === "mistral" ? "M" : "OR"}
                   </div>
                   <div>
                     <div className="font-display text-lg">{agent.label}</div>
@@ -140,7 +139,6 @@ export default function SettingsPage() {
               </p>
               <div className="px-4 py-3 rounded text-sm" style={{ background: "#0a0a0f", border: "1px solid #1e1e2a", fontFamily: "JetBrains Mono, monospace", fontSize: "13px", color: "#9898b0", lineHeight: "2" }}>
                 MISTRAL_API_KEY=…<br />
-                GEMINI_API_KEY=AIza…<br />
                 OPENROUTER_API_KEY=sk-or-…
               </div>
               <p className="opacity-40 text-xs mt-2" style={{ fontFamily: "JetBrains Mono, monospace" }}>
