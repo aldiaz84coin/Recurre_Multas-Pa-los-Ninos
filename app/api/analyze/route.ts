@@ -1,137 +1,87 @@
 /**
- * app/api/analyze/route.ts
- *
- * Orchestrates the two-phase flow:
- *   1. Extract real text from PDF (pdf-parse) or pass image for vision
- *   2. Phase 1 – All agents extract metadata in parallel → consensus
- *   3. Phase 2 – All agents generate the recurso with enriched context
+ * app/api/analyze/route.ts – versión simplificada
+ * 3 agentes fijos, sin consenso, devuelve las 3 respuestas separadas
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import pdfParse from "pdf-parse";
-import {
-  callAgent,
-  mergeResponses,
-  generateInstructionsFromMetadata,
-  extractFineMetadata,
-  buildEnrichedPrompt,
-  type AgentConfig,
-  type FineMetadata,
-} from "@/lib/llm";
+import { callAgent, buildUserPrompt, generateInstructions, FIXED_AGENTS } from "@/lib/llm";
 
 export const maxDuration = 120;
 
-// ─── File text extraction ─────────────────────────────────────────────────────
-
-async function extractTextFromFile(
-  base64: string,
-  mimeType: string,
-  fileName: string
-): Promise<{ text: string; isImage: boolean }> {
+async function extractTextFromFile(base64: string, mimeType: string, fileName: string): Promise<{ text: string; isImage: boolean }> {
   const isImage = mimeType.startsWith("image/");
-
   if (isImage) {
-    // Images are passed directly to vision-capable models; no server-side text extraction
-    return { text: `[Imagen de la multa: ${fileName}. Analiza la imagen adjunta.]`, isImage: true };
+    return { text: `[Imagen adjunta: ${fileName}]`, isImage: true };
   }
-
-  // PDF — try to extract text layer
   try {
     const buffer = Buffer.from(base64, "base64");
     const parsed = await pdfParse(buffer);
     const text = (parsed.text || "").trim();
-    if (text.length > 50) {
-      return { text, isImage: false };
-    }
-    // Scanned PDF with no text layer
-    return {
-      text: `[PDF escaneado sin capa de texto: ${fileName}. Intenta extraer la información visible.]`,
-      isImage: false,
-    };
+    if (text.length > 50) return { text, isImage: false };
+    return { text: `[PDF escaneado sin texto extraíble: ${fileName}]`, isImage: false };
   } catch {
-    return {
-      text: `[No se pudo extraer texto del PDF: ${fileName}]`,
-      isImage: false,
-    };
+    return { text: `[No se pudo extraer texto del PDF: ${fileName}]`, isImage: false };
   }
 }
 
-// ─── Route handler ────────────────────────────────────────────────────────────
+// Las keys se leen siempre del servidor — el cliente nunca las ve ni las envía
+function getServerApiKeys() {
+  return {
+    groq: process.env.GROQ_API_KEY || "",
+    gemini: process.env.GEMINI_API_KEY || "",
+    openrouter: process.env.OPENROUTER_API_KEY || "",
+  };
+}
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { multaFile, supportFiles, additionalContext, agentConfigs } = body;
+    const { multaFile, supportFiles, additionalContext } = body;
+    // ⚠️  apiKeys ya NO viene del cliente — se leen del entorno del servidor
 
     if (!multaFile?.base64) {
-      return NextResponse.json(
-        { error: "No se proporcionó el documento de la multa" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "No se proporcionó el documento de la multa" }, { status: 400 });
     }
 
-    const enabledAgents: AgentConfig[] = (agentConfigs || []).filter(
-      (a: AgentConfig) => a.enabled && a.apiKey
-    );
-
-    if (enabledAgents.length === 0) {
-      return NextResponse.json(
-        { error: "No hay agentes activos con API key configurada. Ve a Configuración." },
-        { status: 400 }
-      );
+    const apiKeys = getServerApiKeys();
+    const hasAnyKey = apiKeys.groq || apiKeys.gemini || apiKeys.openrouter;
+    if (!hasAnyKey) {
+      return NextResponse.json({ error: "No hay API keys configuradas en el servidor. Contacta al administrador." }, { status: 500 });
     }
 
-    // ── Extract real text from the uploaded multa file ──────────────────────
-    const { text: multaText, isImage } = await extractTextFromFile(
-      multaFile.base64,
-      multaFile.type,
-      multaFile.name
-    );
-
-    // Pass image base64 only if it's actually an image (for vision models)
+    // Extraer texto del PDF o imagen
+    const { text: multaText, isImage } = await extractTextFromFile(multaFile.base64, multaFile.type, multaFile.name);
     const imageBase64 = isImage ? multaFile.base64 : undefined;
     const imageMime = isImage ? multaFile.type : undefined;
 
-    const supportFilesData = (supportFiles || []).map(
-      (sf: { name: string; context: string }) => ({
-        name: sf.name,
-        context: sf.context || "",
-      })
-    );
+    const supportFilesData = (supportFiles || []).map((sf: { name: string; context: string }) => ({
+      name: sf.name,
+      context: sf.context || "",
+    }));
 
-    // ── PHASE 1: All agents extract metadata in parallel ────────────────────
-    let metadata: FineMetadata;
-    try {
-      metadata = await extractFineMetadata(
-        enabledAgents,
-        multaText,
-        imageBase64,
-        imageMime
-      );
-    } catch {
-      metadata = {
-        legislation: [],
-        organism: "",
-        organismAddress: "",
-        fineType: "",
-        fineAmount: "",
-        deadline: "",
-        rawSummary: "",
-      };
-    }
+    const userPrompt = buildUserPrompt(multaText, supportFilesData, additionalContext || "");
 
-    // ── PHASE 2: All agents generate the recurso in parallel ────────────────
-    const userPrompt = buildEnrichedPrompt(
-      multaText,
-      metadata,
-      supportFilesData,
-      additionalContext || ""
-    );
-
-    const agentPromises = enabledAgents.map(async (agent) => {
-      const result = await callAgent(agent, userPrompt, metadata, imageBase64, imageMime);
+    // Llamar a los 3 agentes en paralelo (solo los que tienen API key)
+    const agentPromises = FIXED_AGENTS.map(async (agentDef) => {
+      const key = apiKeys[agentDef.provider];
+      if (!key) {
+        return {
+          agentId: agentDef.id,
+          agentName: agentDef.name,
+          label: agentDef.label,
+          color: agentDef.color,
+          status: "skipped" as const,
+          content: "",
+          error: "Sin API key configurada",
+        };
+      }
+      const result = await callAgent({ ...agentDef, apiKey: key, enabled: true }, userPrompt, imageBase64, imageMime);
       return {
-        agentName: agent.name,
+        agentId: agentDef.id,
+        agentName: agentDef.name,
+        label: agentDef.label,
+        color: agentDef.color,
         status: result.error ? ("error" as const) : ("done" as const),
         content: result.content,
         error: result.error,
@@ -139,34 +89,24 @@ export async function POST(req: NextRequest) {
     });
 
     const settled = await Promise.allSettled(agentPromises);
-    const resolvedResults = settled.map((r, idx) => {
+    const agentResults = settled.map((r, idx) => {
       if (r.status === "fulfilled") return r.value;
       return {
-        agentName: enabledAgents[idx]?.name || `Agente ${idx + 1}`,
+        agentId: FIXED_AGENTS[idx].id,
+        agentName: FIXED_AGENTS[idx].name,
+        label: FIXED_AGENTS[idx].label,
+        color: FIXED_AGENTS[idx].color,
         status: "error" as const,
         content: "",
         error: (r.reason as Error)?.message || "Error desconocido",
       };
     });
 
-    // ── Merge + instructions ────────────────────────────────────────────────
-    const successful = resolvedResults.filter((r) => r.status === "done" && r.content);
-    const mergedDoc = mergeResponses(
-      successful.map((r) => ({ agentName: r.agentName, content: r.content }))
-    );
-    const instructions = generateInstructionsFromMetadata(metadata);
+    const instructions = generateInstructions();
 
-    return NextResponse.json({
-      agentResults: resolvedResults,
-      mergedDoc,
-      instructions,
-      metadata, // UI can display extracted organism + legislation
-    });
-  } catch (err: unknown) {
+    return NextResponse.json({ agentResults, instructions });
+  } catch (err) {
     console.error("Analyze error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Error interno" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Error interno" }, { status: 500 });
   }
 }
