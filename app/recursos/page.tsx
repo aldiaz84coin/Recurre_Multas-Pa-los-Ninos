@@ -33,6 +33,8 @@ export default function RecursosPage() {
   const [agentResults, setAgentResults] = useState<AgentResult[]>([]);
   const [instructions, setInstructions] = useState("");
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
+  const [parsedText, setParsedText] = useState("");
+  const [showParsed, setShowParsed] = useState(false);
 
   const { getRootProps: getMultaProps, getInputProps: getMultaInputProps, isDragActive: isMultaDrag } = useDropzone({
     accept: { "application/pdf": [".pdf"], "image/*": [".jpg", ".jpeg", ".png", ".webp"] },
@@ -100,6 +102,7 @@ export default function RecursosPage() {
       const data = await response.json();
       setAgentResults(data.agentResults);
       setInstructions(data.instructions);
+      if (data.parsedText) setParsedText(data.parsedText);
       // Auto-expand first successful result
       const first = data.agentResults.find((r: AgentResult) => r.status === "done");
       if (first) setExpandedAgent(first.agentId);
@@ -335,7 +338,35 @@ export default function RecursosPage() {
               </p>
             </div>
 
-            <div className="space-y-4 mb-10">
+            {/* Parsed document data */}
+            {parsedText && (
+              <div className="rounded-sm overflow-hidden mb-6"
+                style={{ border: "1px solid #2a2a38", background: "#111118" }}>
+                <button
+                  onClick={() => setShowParsed(p => !p)}
+                  className="w-full flex items-center justify-between px-6 py-4 hover:opacity-80 transition-opacity">
+                  <div className="flex items-center gap-3">
+                    <FileText className="w-4 h-4" style={{ color: "#c9a84c" }} />
+                    <span className="font-display text-base">Datos extraídos del documento</span>
+                    <span className="text-xs px-2 py-0.5 rounded"
+                      style={{ background: "#4ade8015", color: "#4ade80", border: "1px solid #4ade8030", fontFamily: "JetBrains Mono, monospace" }}>
+                      ✓ Parseado correctamente
+                    </span>
+                  </div>
+                  {showParsed ? <ChevronUp className="w-4 h-4 opacity-40" /> : <ChevronDown className="w-4 h-4 opacity-40" />}
+                </button>
+                {showParsed && (
+                  <div className="px-6 pb-6 border-t" style={{ borderColor: "#1e1e2a" }}>
+                    <pre className="mt-4 text-xs leading-relaxed whitespace-pre-wrap overflow-auto max-h-72"
+                      style={{ fontFamily: "JetBrains Mono, monospace", color: "#9898b0" }}>
+                      {parsedText}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            )}
+
+                        <div className="space-y-4 mb-10">
               {agentResults.map((agent) => (
                 <div key={agent.agentId} className="rounded-sm overflow-hidden transition-all"
                   style={{
@@ -419,7 +450,7 @@ export default function RecursosPage() {
 
             {/* Reset */}
             <div className="flex justify-center">
-              <button onClick={() => { setStep(1); setMultaFile(null); setSupportFiles([]); setAdditionalContext(""); setAgentResults([]); setInstructions(""); setExpandedAgent(null); }}
+              <button onClick={() => { setStep(1); setMultaFile(null); setSupportFiles([]); setAdditionalContext(""); setAgentResults([]); setInstructions(""); setExpandedAgent(null); setParsedText(""); setShowParsed(false); }}
                 className="flex items-center gap-2 px-8 py-4 rounded-sm font-semibold text-lg border transition-all"
                 style={{ borderColor: "#2a2a38", color: "#9898b0", fontFamily: "Playfair Display, serif" }}>
                 Nueva multa
