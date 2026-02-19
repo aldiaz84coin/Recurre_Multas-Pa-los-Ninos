@@ -20,17 +20,18 @@ interface AgentConfig {
 }
 
 type ConnectionStatus = "idle" | "testing" | "ok" | "error";
-
-interface AgentStatus {
-  status: ConnectionStatus;
-  message: string;
-  latency?: number;
-}
+interface AgentStatus { status: ConnectionStatus; message: string; latency?: number; }
 
 const PROVIDERS = {
   groq: {
     label: "Groq",
-    models: ["llama-3.1-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"],
+    models: [
+      "llama-3.3-70b-versatile",
+      "llama-3.1-70b-versatile",
+      "llama-3.1-8b-instant",
+      "mixtral-8x7b-32768",
+      "gemma2-9b-it",
+    ],
     baseUrl: "https://api.groq.com/openai/v1",
     freeInfo: "Free · 14.4k tokens/min",
     signupUrl: "https://console.groq.com",
@@ -39,27 +40,33 @@ const PROVIDERS = {
   gemini: {
     label: "Google Gemini",
     models: [
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-    "gemini-1.5-flash",
-    "gemini-1.5-flash-8b",
-  ],
-   // models: ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"],
+      "gemini-2.0-flash",
+      "gemini-1.5-flash",
+      "gemini-1.5-flash-8b",
+    ],
     baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-    freeInfo: "Free · 15 RPM flash",
+    freeInfo: "Free · 15 RPM (puede agotarse)",
     signupUrl: "https://aistudio.google.com",
     color: "#4285f4",
   },
   openrouter: {
     label: "OpenRouter",
+    // Only :free models — verified available
     models: [
+      "meta-llama/llama-3.3-70b-instruct:free",
       "meta-llama/llama-3.1-8b-instruct:free",
       "mistralai/mistral-7b-instruct:free",
-      "google/gemma-2-9b-it:free",
-      "qwen/qwen-2-7b-instruct:free",
+      "mistralai/devstral-small:free",
+      "google/gemma-3-12b-it:free",
+      "google/gemma-3-4b-it:free",
+      "qwen/qwen3-8b:free",
+      "qwen/qwen3-14b:free",
+      "deepseek/deepseek-r1-0528:free",
+      "deepseek/deepseek-chat-v3-0324:free",
+      "thudm/glm-4-32b:free",
     ],
     baseUrl: "https://openrouter.ai/api/v1",
-    freeInfo: "Modelos :free disponibles",
+    freeInfo: "Free · modelos :free sin coste",
     signupUrl: "https://openrouter.ai",
     color: "#8b5cf6",
   },
@@ -75,7 +82,7 @@ const PROVIDERS = {
     label: "Custom / Ollama",
     models: [],
     baseUrl: "http://localhost:11434/v1",
-    freeInfo: "Endpoint OpenAI-compatible",
+    freeInfo: "Endpoint OpenAI-compatible propio",
     signupUrl: "",
     color: "#6b7280",
   },
@@ -88,9 +95,9 @@ const ROLES = [
 ];
 
 const DEFAULT_AGENTS: AgentConfig[] = [
-  { id: "agent-1", name: "Agente 1 — Análisis legal", provider: "groq", model: "llama-3.1-70b-versatile", apiKey: "", enabled: true, role: ROLES[0] },
-  { id: "agent-2", name: "Agente 2 — Legislación específica", provider: "gemini", model: "gemini-1.5-flash", apiKey: "", enabled: true, role: ROLES[1] },
-  { id: "agent-3", name: "Agente 3 — Redacción del recurso", provider: "openrouter", model: "meta-llama/llama-3.1-8b-instruct:free", apiKey: "", enabled: true, role: ROLES[2] },
+  { id: "agent-1", name: "Agente 1 — Análisis legal", provider: "groq", model: "llama-3.3-70b-versatile", apiKey: "", enabled: true, role: ROLES[0] },
+  { id: "agent-2", name: "Agente 2 — Legislación específica", provider: "openrouter", model: "meta-llama/llama-3.3-70b-instruct:free", apiKey: "", enabled: true, role: ROLES[1] },
+  { id: "agent-3", name: "Agente 3 — Redacción del recurso", provider: "openrouter", model: "deepseek/deepseek-chat-v3-0324:free", apiKey: "", enabled: true, role: ROLES[2] },
 ];
 
 const STORAGE_KEY = "recursapp_agents";
@@ -109,10 +116,8 @@ function loadAgents(): AgentConfig[] {
 function saveAgents(agents: AgentConfig[]): boolean {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(agents));
-    return true;
-  } catch {
-    return false;
-  }
+    return !!localStorage.getItem(STORAGE_KEY);
+  } catch { return false; }
 }
 
 export default function SettingsPage() {
@@ -123,129 +128,68 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false);
   const [mounted, setMounted] = useState(false);
 
-  useEffect(() => {
-    setAgents(loadAgents());
-    setMounted(true);
-  }, []);
+  useEffect(() => { setAgents(loadAgents()); setMounted(true); }, []);
 
   const updateAgent = useCallback((id: string, field: keyof AgentConfig, value: string | boolean) => {
-    setAgents((prev) =>
-      prev.map((a) => {
-        if (a.id !== id) return a;
-        const updated = { ...a, [field]: value };
-        if (field === "provider") {
-          const prov = PROVIDERS[value as keyof typeof PROVIDERS];
-          updated.baseUrl = prov.baseUrl;
-          updated.model = prov.models[0] || "";
-        }
-        return updated;
-      })
-    );
-    setStatuses((prev) => ({ ...prev, [id]: { status: "idle", message: "" } }));
+    setAgents(prev => prev.map(a => {
+      if (a.id !== id) return a;
+      const updated = { ...a, [field]: value };
+      if (field === "provider") {
+        const prov = PROVIDERS[value as keyof typeof PROVIDERS];
+        updated.baseUrl = prov.baseUrl;
+        updated.model = prov.models[0] || "";
+      }
+      return updated;
+    }));
+    setStatuses(prev => ({ ...prev, [id]: { status: "idle", message: "" } }));
     setDirty(true);
     setSaved(false);
   }, []);
 
   const handleSave = useCallback(() => {
-    const ok = saveAgents(agents);
-    if (ok) {
-      setSaved(true);
-      setDirty(false);
+    if (saveAgents(agents)) {
+      setSaved(true); setDirty(false);
       toast.success("Configuración guardada");
       setTimeout(() => setSaved(false), 3000);
     } else {
-      toast.error("Error al guardar en localStorage");
+      toast.error("Error al guardar");
     }
   }, [agents]);
 
   const testAgent = useCallback(async (agent: AgentConfig) => {
-    if (!agent.apiKey?.trim()) {
-      setStatuses((prev) => ({
-        ...prev,
-        [agent.id]: { status: "error", message: "Introduce una API key primero" },
-      }));
+    if (!agent.apiKey) {
+      setStatuses(prev => ({ ...prev, [agent.id]: { status: "error", message: "Introduce una API key primero" } }));
       return;
     }
-
-    setStatuses((prev) => ({
-      ...prev,
-      [agent.id]: { status: "testing", message: "Conectando…" },
-    }));
-
+    setStatuses(prev => ({ ...prev, [agent.id]: { status: "testing", message: "Conectando…" } }));
     try {
-      const payload = {
-        provider: agent.provider,
-        model: agent.model,
-        apiKey: agent.apiKey.trim(),
-        baseUrl: agent.baseUrl || "",
-      };
-
-      console.log("[test-agent] sending:", { ...payload, apiKey: "***" });
-
       const res = await fetch("/api/test-agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ provider: agent.provider, model: agent.model, apiKey: agent.apiKey, baseUrl: agent.baseUrl }),
       });
-
-      console.log("[test-agent] HTTP status:", res.status);
-
-      if (!res.ok) {
-        const text = await res.text();
-        console.error("[test-agent] non-OK response:", text);
-        setStatuses((prev) => ({
-          ...prev,
-          [agent.id]: {
-            status: "error",
-            message: `Error del servidor (${res.status}): ${text.slice(0, 120)}`,
-          },
-        }));
-        return;
-      }
-
+      if (!res.ok) throw new Error(`Servidor respondió ${res.status}`);
       const data = await res.json();
-      console.log("[test-agent] result:", data);
-
-      setStatuses((prev) => ({
-        ...prev,
-        [agent.id]: {
-          status: data.ok ? "ok" : "error",
-          message: data.message || (data.ok ? "Conectado" : "Error desconocido"),
-          latency: data.latency,
-        },
-      }));
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Error desconocido";
-      console.error("[test-agent] fetch error:", err);
-      setStatuses((prev) => ({
-        ...prev,
-        [agent.id]: {
-          status: "error",
-          message: `Fetch falló: ${msg}`,
-        },
-      }));
+      setStatuses(prev => ({ ...prev, [agent.id]: { status: data.ok ? "ok" : "error", message: data.message, latency: data.latency } }));
+    } catch (e: unknown) {
+      setStatuses(prev => ({ ...prev, [agent.id]: { status: "error", message: e instanceof Error ? e.message : "Error de red" } }));
     }
   }, []);
 
   const testAll = useCallback(async () => {
-    const withKeys = agents.filter((a) => a.enabled && a.apiKey?.trim());
-    if (withKeys.length === 0) {
-      toast.error("Ningún agente tiene API key configurada");
-      return;
-    }
+    const withKeys = agents.filter(a => a.enabled && a.apiKey);
+    if (!withKeys.length) { toast.error("Ningún agente tiene API key"); return; }
     toast("Probando agentes…", { icon: "🔌" });
     await Promise.all(withKeys.map(testAgent));
   }, [agents, testAgent]);
 
   if (!mounted) return null;
 
-  const okCount = Object.values(statuses).filter((s) => s.status === "ok").length;
-  const errCount = Object.values(statuses).filter((s) => s.status === "error").length;
-  const testedCount = okCount + errCount;
+  const okCount = Object.values(statuses).filter(s => s.status === "ok").length;
+  const errCount = Object.values(statuses).filter(s => s.status === "error").length;
 
   return (
     <main className="min-h-screen">
-      {/* Sticky nav */}
       <nav className="flex items-center justify-between px-8 py-5 border-b sticky top-0 z-50"
         style={{ borderColor: "#2a2a38", background: "#0a0a0fee", backdropFilter: "blur(16px)" }}>
         <div className="flex items-center gap-6">
@@ -260,7 +204,6 @@ export default function SettingsPage() {
             </span>
           </div>
         </div>
-
         <div className="flex items-center gap-3">
           {dirty && (
             <div className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full"
@@ -269,7 +212,7 @@ export default function SettingsPage() {
             </div>
           )}
           <button onClick={testAll}
-            className="flex items-center gap-2 px-4 py-2 rounded-sm text-sm border transition-all hover:opacity-100 opacity-70"
+            className="flex items-center gap-2 px-4 py-2 rounded-sm text-sm border transition-all hover:opacity-100 opacity-60"
             style={{ borderColor: "#2a2a38", color: "#9898b0", fontFamily: "JetBrains Mono, monospace", fontSize: "12px" }}>
             <Wifi className="w-3.5 h-3.5" /> Probar todos
           </button>
@@ -278,8 +221,7 @@ export default function SettingsPage() {
             style={{
               background: saved ? "#1a3a1a" : "linear-gradient(135deg, #c9a84c, #9a7530)",
               color: saved ? "#4ade80" : "#0a0a0f",
-              fontFamily: "Crimson Text, serif",
-              fontSize: "16px",
+              fontFamily: "Crimson Text, serif", fontSize: "16px",
               border: saved ? "1px solid #4ade8040" : "none",
             }}>
             {saved ? <CheckCircle className="w-4 h-4" /> : <Save className="w-4 h-4" />}
@@ -292,17 +234,15 @@ export default function SettingsPage() {
         <div className="mb-8">
           <h1 className="font-display text-5xl mb-2">Agentes LLM</h1>
           <p className="opacity-40 text-sm" style={{ fontFamily: "JetBrains Mono, monospace" }}>
-            Las API keys se guardan únicamente en tu navegador (localStorage)
+            Las API keys se guardan únicamente en tu navegador
           </p>
         </div>
 
         {/* Status bar */}
-        {testedCount > 0 && (
-          <div className="flex items-center gap-6 px-5 py-3 rounded-sm mb-8"
+        {(okCount > 0 || errCount > 0) && (
+          <div className="flex items-center gap-4 px-5 py-3 rounded-sm mb-6"
             style={{ background: "#111118", border: "1px solid #2a2a38" }}>
-            <span className="text-xs opacity-40" style={{ fontFamily: "JetBrains Mono, monospace" }}>
-              Estado de conexión:
-            </span>
+            <span className="text-xs opacity-40" style={{ fontFamily: "JetBrains Mono, monospace" }}>Estado:</span>
             {okCount > 0 && (
               <div className="flex items-center gap-1.5">
                 <div className="w-2 h-2 rounded-full animate-pulse" style={{ background: "#4ade80" }} />
@@ -322,11 +262,10 @@ export default function SettingsPage() {
           </div>
         )}
 
-        {/* Agent cards */}
         <div className="space-y-5">
           {agents.map((agent, idx) => {
             const prov = PROVIDERS[agent.provider];
-            const s: AgentStatus = statuses[agent.id] ?? { status: "idle", message: "" };
+            const s = statuses[agent.id] ?? { status: "idle" as ConnectionStatus, message: "" };
             const borderColor = s.status === "ok" ? "#4ade8035" : s.status === "error" ? "#f8717135" : "#2a2a38";
 
             return (
@@ -342,21 +281,19 @@ export default function SettingsPage() {
                     </div>
                     <div>
                       <input type="text" value={agent.name}
-                        onChange={(e) => updateAgent(agent.id, "name", e.target.value)}
+                        onChange={e => updateAgent(agent.id, "name", e.target.value)}
                         className="bg-transparent font-display text-lg focus:outline-none border-b border-transparent transition-colors"
-                        style={{ color: "#f9f6ef", maxWidth: 280 }}
-                        onFocus={(e) => (e.target.style.borderColor = "#c9a84c50")}
-                        onBlur={(e) => (e.target.style.borderColor = "transparent")}
+                        style={{ color: "#f9f6ef", maxWidth: 260 }}
+                        onFocus={e => e.target.style.borderColor = "#c9a84c50"}
+                        onBlur={e => e.target.style.borderColor = "transparent"}
                       />
                       <div className="flex items-center gap-2 mt-0.5">
-                        <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: prov.color }} />
-                        <span className="text-xs" style={{ color: prov.color, fontFamily: "JetBrains Mono, monospace", fontSize: "11px" }}>
-                          {prov.label}
-                        </span>
+                        <span className="w-1.5 h-1.5 rounded-full" style={{ background: prov.color }} />
+                        <span className="text-xs" style={{ color: prov.color, fontFamily: "JetBrains Mono, monospace", fontSize: "11px" }}>{prov.label}</span>
                         <span className="text-xs opacity-20">·</span>
-                        <span className="text-xs opacity-40 truncate max-w-[180px]"
-                          style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "11px" }}>
-                          {agent.model.split("/").pop()}
+                        <span className="text-xs opacity-40 truncate max-w-[200px]" style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "11px" }}>
+                          {agent.model.replace(/:free$/, "").split("/").pop()}
+                          {agent.model.endsWith(":free") && <span style={{ color: "#4ade80" }}> :free</span>}
                         </span>
                       </div>
                     </div>
@@ -364,7 +301,7 @@ export default function SettingsPage() {
 
                   <div className="flex items-center gap-3 flex-shrink-0">
                     {/* Status pill */}
-                    <div className="min-w-[140px] flex justify-end">
+                    <div className="min-w-[130px] flex justify-end">
                       {s.status === "idle" && !agent.apiKey && (
                         <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs"
                           style={{ background: "#1a1a24", border: "1px solid #2a2a38", color: "#44445a", fontFamily: "JetBrains Mono, monospace" }}>
@@ -398,15 +335,13 @@ export default function SettingsPage() {
                       )}
                     </div>
 
-                    {/* Test button */}
                     <button onClick={() => testAgent(agent)} disabled={s.status === "testing"}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm text-xs border transition-all hover:border-gold hover:opacity-100 opacity-60"
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm text-xs border transition-all hover:opacity-100 opacity-60"
                       style={{ borderColor: "#2a2a38", color: "#9898b0", fontFamily: "JetBrains Mono, monospace", cursor: s.status === "testing" ? "not-allowed" : "pointer" }}>
                       {s.status === "testing" ? <Loader className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
                       Probar
                     </button>
 
-                    {/* Toggle */}
                     <div className="flex items-center gap-2">
                       <span className="text-xs" style={{ color: agent.enabled ? "#c9a84c" : "#44445a", fontFamily: "JetBrains Mono, monospace", fontSize: "10px" }}>
                         {agent.enabled ? "ON" : "OFF"}
@@ -426,15 +361,9 @@ export default function SettingsPage() {
                   <div className="px-6 py-3 flex items-start gap-2 border-b"
                     style={{ background: "#f8717108", borderColor: "#f8717120" }}>
                     <XCircle className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: "#f87171" }} />
-                    <div>
-                      <p className="text-xs font-semibold mb-0.5"
-                        style={{ color: "#f87171", fontFamily: "JetBrains Mono, monospace" }}>
-                        Error de conexión
-                      </p>
-                      <p className="text-xs" style={{ color: "#f87171", fontFamily: "JetBrains Mono, monospace", opacity: 0.8, lineHeight: 1.6 }}>
-                        {s.message}
-                      </p>
-                    </div>
+                    <p className="text-xs" style={{ color: "#f87171", fontFamily: "JetBrains Mono, monospace", lineHeight: 1.6 }}>
+                      {s.message}
+                    </p>
                   </div>
                 )}
 
@@ -443,11 +372,8 @@ export default function SettingsPage() {
                   {/* Provider */}
                   <div>
                     <label className="block mb-2 uppercase tracking-widest opacity-40"
-                      style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "10px" }}>
-                      Proveedor
-                    </label>
-                    <select value={agent.provider}
-                      onChange={(e) => updateAgent(agent.id, "provider", e.target.value)}
+                      style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "10px" }}>Proveedor</label>
+                    <select value={agent.provider} onChange={e => updateAgent(agent.id, "provider", e.target.value)}
                       className="w-full px-3 py-2.5 rounded-sm focus:outline-none appearance-none"
                       style={{ background: "#0a0a0f", border: "1px solid #2a2a38", color: "#f9f6ef", fontFamily: "Crimson Text, serif", fontSize: "16px" }}>
                       {Object.entries(PROVIDERS).map(([key, p]) => (
@@ -455,9 +381,7 @@ export default function SettingsPage() {
                       ))}
                     </select>
                     <div className="flex items-center justify-between mt-1.5">
-                      <p style={{ color: prov.color, fontFamily: "JetBrains Mono, monospace", fontSize: "11px" }}>
-                        {prov.freeInfo}
-                      </p>
+                      <p style={{ color: prov.color, fontFamily: "JetBrains Mono, monospace", fontSize: "11px" }}>{prov.freeInfo}</p>
                       {prov.signupUrl && (
                         <a href={prov.signupUrl} target="_blank" rel="noopener noreferrer"
                           className="flex items-center gap-1 opacity-40 hover:opacity-100 transition-opacity"
@@ -471,22 +395,16 @@ export default function SettingsPage() {
                   {/* Model */}
                   <div>
                     <label className="block mb-2 uppercase tracking-widest opacity-40"
-                      style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "10px" }}>
-                      Modelo
-                    </label>
+                      style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "10px" }}>Modelo</label>
                     {agent.provider === "custom" ? (
-                      <input type="text" value={agent.model}
-                        onChange={(e) => updateAgent(agent.id, "model", e.target.value)}
-                        placeholder="ej: llama3, mistral…"
-                        className="w-full px-3 py-2.5 rounded-sm focus:outline-none"
-                        style={{ background: "#0a0a0f", border: "1px solid #2a2a38", color: "#f9f6ef", fontFamily: "JetBrains Mono, monospace", fontSize: "13px" }}
-                      />
+                      <input type="text" value={agent.model} onChange={e => updateAgent(agent.id, "model", e.target.value)}
+                        placeholder="ej: llama3, mistral…" className="w-full px-3 py-2.5 rounded-sm focus:outline-none"
+                        style={{ background: "#0a0a0f", border: "1px solid #2a2a38", color: "#f9f6ef", fontFamily: "JetBrains Mono, monospace", fontSize: "13px" }} />
                     ) : (
-                      <select value={agent.model}
-                        onChange={(e) => updateAgent(agent.id, "model", e.target.value)}
+                      <select value={agent.model} onChange={e => updateAgent(agent.id, "model", e.target.value)}
                         className="w-full px-3 py-2.5 rounded-sm focus:outline-none appearance-none"
-                        style={{ background: "#0a0a0f", border: "1px solid #2a2a38", color: "#f9f6ef", fontFamily: "JetBrains Mono, monospace", fontSize: "13px" }}>
-                        {prov.models.map((m) => (
+                        style={{ background: "#0a0a0f", border: "1px solid #2a2a38", color: "#f9f6ef", fontFamily: "JetBrains Mono, monospace", fontSize: "12px" }}>
+                        {prov.models.map(m => (
                           <option key={m} value={m}>{m}</option>
                         ))}
                       </select>
@@ -496,26 +414,21 @@ export default function SettingsPage() {
                   {/* API Key */}
                   <div>
                     <label className="block mb-2 uppercase tracking-widest opacity-40"
-                      style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "10px" }}>
-                      API Key
-                    </label>
+                      style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "10px" }}>API Key</label>
                     <div className="relative">
                       <input
                         type={showKeys[agent.id] ? "text" : "password"}
                         value={agent.apiKey}
-                        onChange={(e) => updateAgent(agent.id, "apiKey", e.target.value)}
+                        onChange={e => updateAgent(agent.id, "apiKey", e.target.value)}
                         placeholder={agent.provider === "gemini" ? "AIza…" : "sk-…"}
                         className="w-full px-3 py-2.5 pr-10 rounded-sm focus:outline-none"
                         style={{
                           background: "#0a0a0f",
                           border: `1px solid ${s.status === "ok" ? "#4ade8050" : s.status === "error" ? "#f8717150" : agent.apiKey ? "#c9a84c40" : "#2a2a38"}`,
-                          color: "#f9f6ef",
-                          fontFamily: "JetBrains Mono, monospace",
-                          fontSize: "13px",
+                          color: "#f9f6ef", fontFamily: "JetBrains Mono, monospace", fontSize: "13px",
                         }}
                       />
-                      <button type="button"
-                        onClick={() => setShowKeys((p) => ({ ...p, [agent.id]: !p[agent.id] }))}
+                      <button type="button" onClick={() => setShowKeys(p => ({ ...p, [agent.id]: !p[agent.id] }))}
                         className="absolute right-3 top-1/2 -translate-y-1/2 opacity-30 hover:opacity-80 transition-opacity">
                         {showKeys[agent.id] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                       </button>
@@ -525,15 +438,13 @@ export default function SettingsPage() {
                         <>
                           <div className="w-1.5 h-1.5 rounded-full" style={{ background: "#4ade80" }} />
                           <span style={{ color: "#4ade8080", fontFamily: "JetBrains Mono, monospace", fontSize: "10px" }}>
-                            Key guardada · {agent.apiKey.length} chars
+                            {agent.apiKey.length} caracteres guardados
                           </span>
                         </>
                       ) : (
                         <>
                           <div className="w-1.5 h-1.5 rounded-full" style={{ background: "#44445a" }} />
-                          <span style={{ color: "#44445a", fontFamily: "JetBrains Mono, monospace", fontSize: "10px" }}>
-                            Sin API key — agente inactivo
-                          </span>
+                          <span style={{ color: "#44445a", fontFamily: "JetBrains Mono, monospace", fontSize: "10px" }}>Sin API key</span>
                         </>
                       )}
                     </div>
@@ -542,29 +453,19 @@ export default function SettingsPage() {
                   {/* Role */}
                   <div>
                     <label className="block mb-2 uppercase tracking-widest opacity-40"
-                      style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "10px" }}>
-                      Rol del agente
-                    </label>
-                    <input type="text" value={agent.role}
-                      onChange={(e) => updateAgent(agent.id, "role", e.target.value)}
+                      style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "10px" }}>Rol del agente</label>
+                    <input type="text" value={agent.role} onChange={e => updateAgent(agent.id, "role", e.target.value)}
                       className="w-full px-3 py-2.5 rounded-sm focus:outline-none"
-                      style={{ background: "#0a0a0f", border: "1px solid #2a2a38", color: "#f9f6ef", fontFamily: "Crimson Text, serif", fontSize: "16px" }}
-                    />
+                      style={{ background: "#0a0a0f", border: "1px solid #2a2a38", color: "#f9f6ef", fontFamily: "Crimson Text, serif", fontSize: "16px" }} />
                   </div>
 
-                  {/* Custom base URL */}
                   {agent.provider === "custom" && (
                     <div className="md:col-span-2">
                       <label className="block mb-2 uppercase tracking-widest opacity-40"
-                        style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "10px" }}>
-                        Base URL
-                      </label>
-                      <input type="text" value={agent.baseUrl || ""}
-                        onChange={(e) => updateAgent(agent.id, "baseUrl", e.target.value)}
-                        placeholder="http://localhost:11434/v1"
-                        className="w-full px-3 py-2.5 rounded-sm focus:outline-none"
-                        style={{ background: "#0a0a0f", border: "1px solid #2a2a38", color: "#f9f6ef", fontFamily: "JetBrains Mono, monospace", fontSize: "13px" }}
-                      />
+                        style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "10px" }}>Base URL</label>
+                      <input type="text" value={agent.baseUrl || ""} onChange={e => updateAgent(agent.id, "baseUrl", e.target.value)}
+                        placeholder="http://localhost:11434/v1" className="w-full px-3 py-2.5 rounded-sm focus:outline-none"
+                        style={{ background: "#0a0a0f", border: "1px solid #2a2a38", color: "#f9f6ef", fontFamily: "JetBrains Mono, monospace", fontSize: "13px" }} />
                     </div>
                   )}
                 </div>
@@ -573,18 +474,16 @@ export default function SettingsPage() {
           })}
         </div>
 
-        {/* Bottom bar */}
         <div className="mt-8 pt-8 flex items-center justify-between border-t" style={{ borderColor: "#2a2a38" }}>
           <p className="text-xs opacity-25" style={{ fontFamily: "JetBrains Mono, monospace" }}>
-            Las keys nunca se almacenan en el servidor
+            Las keys no se almacenan en el servidor · Solo se usan al generar el recurso
           </p>
           <button onClick={handleSave}
             className="flex items-center gap-2 px-7 py-3 rounded-sm font-semibold transition-all hover:scale-[1.02]"
             style={{
               background: saved ? "#1a3a1a" : "linear-gradient(135deg, #c9a84c, #9a7530)",
               color: saved ? "#4ade80" : "#0a0a0f",
-              fontFamily: "Playfair Display, serif",
-              fontSize: "17px",
+              fontFamily: "Playfair Display, serif", fontSize: "17px",
               border: saved ? "1px solid #4ade8040" : "none",
             }}>
             {saved ? <CheckCircle className="w-5 h-5" /> : <Save className="w-5 h-5" />}
