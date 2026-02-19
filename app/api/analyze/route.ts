@@ -1,17 +1,14 @@
 /**
  * app/api/analyze/route.ts
  *
- * Flujo en 2 fases:
+ * FASE 1 — Parseo visual con Mistral Pixtral 12B (MISTRAL_API_KEY)
+ *   · Soporta imágenes y PDFs con visión nativa
+ *   · Free tier en La Plateforme (console.mistral.ai)
+ *   · Extrae todos los datos de la multa como texto estructurado
  *
- * FASE 1 — Parseo visual (Gemini 2.0 Flash, gratuito)
- *   - Recibe imagen o PDF
- *   - Extrae TODOS los datos de la multa como texto estructurado
- *   - Resultado: texto legible y completo con todos los campos de la multa
- *
- * FASE 2 — Generación del recurso (3 agentes en paralelo)
- *   - Reciben el texto parseado, NO la imagen
- *   - Sin limitaciones de visión, trabajan sobre datos limpios
- *   - Cada uno genera su propio recurso administrativo completo
+ * FASE 2 — 3 agentes en paralelo sobre texto limpio
+ *   · Mistral Small, Gemini 2.0 Flash, OpenRouter Gemma 3
+ *   · Reciben el texto parseado, sin imagen — sin límites de visión
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -20,100 +17,122 @@ import { callAgent, buildUserPrompt, generateInstructions, FIXED_AGENTS } from "
 
 export const maxDuration = 120;
 
-// ─── Fase 1: Parseo visual con Gemini ────────────────────────────────────────
+// ─── Prompt de parseo ─────────────────────────────────────────────────────────
 
 const PARSE_PROMPT = `Eres un asistente especializado en leer documentos de multas y sanciones administrativas españolas.
 
-Analiza este documento (imagen o PDF) y extrae TODA la información visible en formato de texto estructurado.
-
-Devuelve exactamente esto, rellenando cada campo con lo que veas en el documento (si un campo no aparece, escribe "No indicado"):
+Analiza este documento y extrae TODA la información visible. Rellena cada campo con exactamente lo que veas escrito (si un campo no aparece en el documento, escribe "No indicado"):
 
 === DATOS DE LA MULTA ===
-ORGANISMO SANCIONADOR: [nombre completo del organismo que emite la multa]
-DIRECCIÓN DEL ORGANISMO: [dirección postal si aparece]
-EXPEDIENTE Nº: [número de expediente o boletín]
-FECHA DE LA DENUNCIA: [fecha en que se cometió la infracción]
-FECHA DE NOTIFICACIÓN: [fecha en que se notifica]
-PLAZO PARA RECURRIR: [plazo exacto mencionado, ej: "1 mes desde la notificación"]
+ORGANISMO SANCIONADOR: 
+DIRECCIÓN DEL ORGANISMO: 
+EXPEDIENTE / BOLETÍN Nº: 
+FECHA DE LA INFRACCIÓN: 
+FECHA DE NOTIFICACIÓN: 
+PLAZO PARA RECURRIR: 
 
 === INFRACCIÓN ===
-TIPO DE INFRACCIÓN: [descripción de la infracción tal como aparece]
-ARTÍCULO(S) INFRINGIDO(S): [todos los artículos citados: ej. Art. 91.2 LSV, RD 1428/2003...]
-IMPORTE DE LA SANCIÓN: [cantidad exacta con €]
-PUNTOS RETIRADOS: [si aplica]
-LUGAR DE LA INFRACCIÓN: [dirección o coordenadas si aparecen]
-MATRÍCULA / VEHÍCULO: [si aparece]
+TIPO DE INFRACCIÓN: 
+ARTÍCULOS INFRINGIDOS: 
+IMPORTE DE LA SANCIÓN: 
+PUNTOS RETIRADOS: 
+LUGAR DE LA INFRACCIÓN: 
+MATRÍCULA / VEHÍCULO: 
 
 === DATOS DEL DENUNCIADO ===
-NOMBRE: [si aparece]
-DNI/NIF: [si aparece]
-DOMICILIO: [si aparece]
+NOMBRE: 
+DNI/NIF: 
+DOMICILIO: 
 
 === TEXTO LITERAL RELEVANTE ===
-[Copia aquí cualquier texto importante del documento que no encaje en los campos anteriores, como los hechos descritos, la motivación de la sanción, o cualquier frase relevante para recurrir]
+[Transcribe aquí el texto más importante del documento: hechos descritos, motivación de la sanción, advertencias legales, y cualquier frase relevante para recurrir]
 
 === OBSERVACIONES ===
-[Cualquier dato adicional visible en el documento que pueda ser útil para redactar un recurso]
+[Cualquier dato adicional visible que pueda ser útil para redactar el recurso]
 
-Sé exhaustivo. No omitas ningún detalle visible. No inventes datos — solo extrae lo que está escrito en el documento.`;
+Sé exhaustivo. No inventes datos — solo extrae lo que está escrito en el documento.`;
 
-async function parseDocumentWithGemini(
-  geminiApiKey: string,
+// ─── Fase 1: Parseo con Mistral Pixtral 12B ───────────────────────────────────
+
+async function parseDocumentWithMistral(
+  mistralApiKey: string,
   base64: string,
   mimeType: string,
   fileName: string
 ): Promise<string> {
-  // Si es PDF con texto, intentamos extraer primero con pdf-parse (más fiable)
+  // Para PDFs con capa de texto, intentamos pdf-parse primero (más rápido y fiable)
   if (mimeType === "application/pdf") {
     try {
       const buffer = Buffer.from(base64, "base64");
       const parsed = await pdfParse(buffer);
       const text = (parsed.text || "").trim();
       if (text.length > 100) {
-        // PDF con capa de texto — mandamos el texto a Gemini para estructurarlo
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiApiKey}`;
-        const res = await fetch(url, {
+        // PDF con texto: mandamos el texto a Pixtral para estructurarlo
+        const res = await fetch("https://api.mistral.ai/v1/chat/completions", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${mistralApiKey}`,
+          },
           body: JSON.stringify({
-            contents: [{ parts: [{ text: `${PARSE_PROMPT}\n\nTEXTO DEL DOCUMENTO:\n${text}` }] }],
-            generationConfig: { maxOutputTokens: 2000, temperature: 0.1 },
+            model: "pixtral-12b-2409",
+            messages: [
+              {
+                role: "user",
+                content: `${PARSE_PROMPT}\n\nTEXTO DEL DOCUMENTO:\n${text}`,
+              },
+            ],
+            max_tokens: 2000,
+            temperature: 0.1,
           }),
         });
         if (res.ok) {
           const data = await res.json();
-          const parsed = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-          if (parsed.length > 50) return parsed;
+          const result = data.choices?.[0]?.message?.content || "";
+          if (result.length > 50) return result;
         }
       }
     } catch {
-      // fallback a visión
+      // Fallback a visión directa
     }
   }
 
-  // Imagen o PDF escaneado — visión directa con Gemini
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiApiKey}`;
-  const parts: Array<Record<string, unknown>> = [
-    { inlineData: { mimeType, data: base64 } },
-    { text: PARSE_PROMPT },
-  ];
-
-  const res = await fetch(url, {
+  // Imagen o PDF escaneado: visión directa con Pixtral
+  const res = await fetch("https://api.mistral.ai/v1/chat/completions", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${mistralApiKey}`,
+    },
     body: JSON.stringify({
-      contents: [{ parts }],
-      generationConfig: { maxOutputTokens: 2000, temperature: 0.1 },
+      model: "pixtral-12b-2409",
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "image_url",
+              image_url: { url: `data:${mimeType};base64,${base64}` },
+            },
+            {
+              type: "text",
+              text: PARSE_PROMPT,
+            },
+          ],
+        },
+      ],
+      max_tokens: 2000,
+      temperature: 0.1,
     }),
   });
 
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`Gemini parseo ${res.status}: ${err.slice(0, 200)}`);
+    throw new Error(`Mistral parseo ${res.status}: ${err.slice(0, 300)}`);
   }
 
   const data = await res.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text || `[No se pudo parsear: ${fileName}]`;
+  return data.choices?.[0]?.message?.content || `[No se pudo parsear: ${fileName}]`;
 }
 
 // ─── Keys del servidor ────────────────────────────────────────────────────────
@@ -141,42 +160,42 @@ export async function POST(req: NextRequest) {
     }
 
     const apiKeys = getServerApiKeys();
-    const hasAnyKey = apiKeys.mistral || apiKeys.gemini || apiKeys.openrouter;
-    if (!hasAnyKey) {
+
+    if (!apiKeys.mistral) {
       return NextResponse.json(
-        { error: "No hay API keys configuradas en el servidor. Contacta al administrador." },
+        { error: "Se necesita MISTRAL_API_KEY para el parseo del documento. Configúrala en Vercel." },
         { status: 500 }
       );
     }
 
-    if (!apiKeys.gemini) {
+    const hasAnyAgentKey = apiKeys.mistral || apiKeys.gemini || apiKeys.openrouter;
+    if (!hasAnyAgentKey) {
       return NextResponse.json(
-        { error: "Se necesita GEMINI_API_KEY para el parseo del documento. Configúrala en Vercel." },
+        { error: "No hay API keys de agentes configuradas." },
         { status: 500 }
       );
     }
 
-    // ── FASE 1: Parsear el documento con Gemini ──────────────────────────────
-    console.log("Fase 1: parseando documento con Gemini...");
+    // ── FASE 1: Parsear el documento con Mistral Pixtral ─────────────────────
+    console.log("Fase 1: parseando documento con Mistral Pixtral 12B...");
     let parsedText: string;
     try {
-      parsedText = await parseDocumentWithGemini(
-        apiKeys.gemini,
+      parsedText = await parseDocumentWithMistral(
+        apiKeys.mistral,
         multaFile.base64,
         multaFile.type,
         multaFile.name
       );
-      console.log("Parseo completado:", parsedText.slice(0, 100));
+      console.log("Parseo OK:", parsedText.slice(0, 120));
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Error de parseo";
       return NextResponse.json(
-        { error: `Error al leer el documento: ${msg}` },
+        { error: `Error al leer el documento: ${err instanceof Error ? err.message : "Error desconocido"}` },
         { status: 500 }
       );
     }
 
     // ── FASE 2: Los 3 agentes generan el recurso sobre texto limpio ──────────
-    console.log("Fase 2: generando recursos con 3 agentes...");
+    console.log("Fase 2: generando recursos con 3 agentes en paralelo...");
     const supportFilesData = (supportFiles || []).map(
       (sf: { name: string; context: string }) => ({
         name: sf.name,
@@ -199,7 +218,6 @@ export async function POST(req: NextRequest) {
           error: "Sin API key configurada en el servidor",
         };
       }
-      // Los agentes reciben texto puro — sin imagen
       const result = await callAgent(
         { ...agentDef, apiKey: key, enabled: true },
         userPrompt
@@ -232,7 +250,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       agentResults,
       instructions: generateInstructions(),
-      parsedText, // opcional: la UI podría mostrarlo para debug
+      parsedText, // devolvemos el parseo por si la UI quiere mostrarlo
     });
   } catch (err) {
     console.error("Analyze error:", err);
