@@ -44,6 +44,59 @@ interface PresentacionUrl {
   confianza: string;
 }
 
+// ── Componente PlazoBanner ────────────────────────────────────────────────────
+
+const URGENCY_CONFIG = {
+  ok:      { bg: "#0a1a0a", border: "#4ade8040", color: "#4ade80", icon: "📅", label: "Plazo OK" },
+  aviso:   { bg: "#1a140a", border: "#f9a80040", color: "#f9a800", icon: "⚠️",  label: "Plazo próximo" },
+  urgente: { bg: "#1a0a0a", border: "#f8717140", color: "#f87171", icon: "🚨", label: "¡URGENTE!" },
+  vencido: { bg: "#1a0a0a", border: "#f8717170", color: "#f87171", icon: "❌", label: "Plazo vencido" },
+};
+
+function PlazoBanner({ plazo }: { plazo: PlazoInfo }) {
+  const cfg = URGENCY_CONFIG[plazo.urgencia];
+  return (
+    <div className="rounded-sm px-6 py-5 mb-4"
+      style={{ background: cfg.bg, border: `2px solid ${cfg.border}` }}>
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start gap-4">
+          <div className="text-2xl flex-shrink-0 mt-0.5">{cfg.icon}</div>
+          <div>
+            <div className="flex items-center gap-3 mb-1">
+              <span className="font-display text-lg" style={{ color: cfg.color }}>{cfg.label}</span>
+              <span className="text-xs px-2 py-0.5 rounded font-bold"
+                style={{ background: `${cfg.color}20`, color: cfg.color, fontFamily: "JetBrains Mono, monospace" }}>
+                {plazo.urgencia === "vencido"
+                  ? `Venció hace ${Math.abs(plazo.diasRestantes)} días`
+                  : plazo.diasRestantes === 0
+                  ? "¡Vence HOY!"
+                  : `${plazo.diasRestantes} días restantes`}
+              </span>
+            </div>
+            <div className="text-sm opacity-80 mb-2" style={{ fontFamily: "Crimson Text, serif", fontSize: "16px" }}>
+              Fecha límite:{" "}
+              <strong style={{ color: cfg.color }}>{plazo.fechaLimite}</strong>
+            </div>
+            <div className="text-xs opacity-50" style={{ fontFamily: "JetBrains Mono, monospace", lineHeight: "1.8" }}>
+              <div>Tipo: {plazo.tipoRecurso}</div>
+              <div>Base legal: {plazo.baseLegal}</div>
+              <div>Notificación: {plazo.fechaNotificacion}</div>
+            </div>
+          </div>
+        </div>
+        {plazo.urgencia !== "vencido" && (
+          <div className="flex-shrink-0 text-right">
+            <div className="font-display text-4xl font-bold" style={{ color: cfg.color, lineHeight: 1 }}>
+              {plazo.diasRestantes}
+            </div>
+            <div className="text-xs opacity-60 mt-1" style={{ fontFamily: "JetBrains Mono, monospace" }}>días</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function RecursosPage() {
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [multaFile, setMultaFile] = useState<UploadedFile | null>(null);
@@ -357,56 +410,7 @@ export default function RecursosPage() {
             </div>
 
             {/* ── BANNER PLAZO MÁXIMO ── */}
-            {plazoInfo && (() => {
-              const urgencyConfig = {
-                ok:      { bg: "#0a1a0a", border: "#4ade8040", color: "#4ade80", icon: "📅", label: "Plazo OK" },
-                aviso:   { bg: "#1a140a", border: "#f9a80040", color: "#f9a800", icon: "⚠️", label: "Plazo próximo" },
-                urgente: { bg: "#1a0a0a", border: "#f8717140", color: "#f87171", icon: "🚨", label: "¡URGENTE!" },
-                vencido: { bg: "#1a0a0a", border: "#f8717170", color: "#f87171", icon: "❌", label: "Plazo vencido" },
-              }[plazoInfo.urgencia];
-              return (
-                <div className="rounded-sm px-6 py-5 mb-4"
-                  style={{ background: urgencyConfig.bg, border: `2px solid ${urgencyConfig.border}` }}>
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex items-start gap-4">
-                      <div className="text-2xl flex-shrink-0 mt-0.5">{urgencyConfig.icon}</div>
-                      <div>
-                        <div className="flex items-center gap-3 mb-1">
-                          <span className="font-display text-lg" style={{ color: urgencyConfig.color }}>
-                            {urgencyConfig.label}
-                          </span>
-                          <span className="text-xs px-2 py-0.5 rounded font-bold"
-                            style={{ background: `${urgencyConfig.color}20`, color: urgencyConfig.color, fontFamily: "JetBrains Mono, monospace" }}>
-                            {plazoInfo.urgencia === "vencido"
-                              ? `Venció hace ${Math.abs(plazoInfo.diasRestantes)} días`
-                              : plazoInfo.diasRestantes === 0
-                              ? "¡Vence HOY!"
-                              : `${plazoInfo.diasRestantes} días restantes`}
-                          </span>
-                        </div>
-                        <div className="text-sm opacity-80 mb-2" style={{ fontFamily: "Crimson Text, serif", fontSize: "16px" }}>
-                          Fecha límite de presentación:{" "}
-                          <strong style={{ color: urgencyConfig.color }}>{plazoInfo.fechaLimite}</strong>
-                        </div>
-                        <div className="text-xs opacity-50 space-y-0.5" style={{ fontFamily: "JetBrains Mono, monospace" }}>
-                          <div>Tipo: {plazoInfo.tipoRecurso}</div>
-                          <div>Base legal: {plazoInfo.baseLegal}</div>
-                          <div>Notificación recibida: {plazoInfo.fechaNotificacion}</div>
-                        </div>
-                      </div>
-                    </div>
-                    {plazoInfo.urgencia !== "vencido" && (
-                      <div className="flex-shrink-0 text-right">
-                        <div className="font-display text-4xl font-bold" style={{ color: urgencyConfig.color, lineHeight: 1 }}>
-                          {plazoInfo.diasRestantes}
-                        </div>
-                        <div className="text-xs opacity-60 mt-1" style={{ fontFamily: "JetBrains Mono, monospace" }}>días</div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })()}
+            {plazoInfo && <PlazoBanner plazo={plazoInfo} />}
 
             {/* ── LINK SEDE ELECTRÓNICA ── */
             {presentacionUrl && (
