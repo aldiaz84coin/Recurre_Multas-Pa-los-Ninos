@@ -1,11 +1,8 @@
 /**
  * lib/llm.ts
  *
- * FASE 2 — 3 agentes en paralelo con fallback automático entre modelos :free
- * FASE 3 — Mistral Large fusiona los 3 borradores en el RECURSO DEFINITIVO
- *
- * Estrategia de resiliencia: cada agente OpenRouter tiene una lista de modelos
- * de fallback — si uno da 429 o 404, prueba el siguiente automáticamente.
+ * FASE 2 — 3 agentes en paralelo → cada uno genera un borrador + propone URL sede electrónica
+ * FASE 3 — Mistral Large fusiona los 3 borradores en el RECURSO DEFINITIVO + URL consensuada
  */
 
 export interface AgentConfig {
@@ -17,23 +14,17 @@ export interface AgentConfig {
   enabled: boolean;
 }
 
+export interface UrlProposal {
+  url: string;
+  nombre: string;
+  confianza: string;
+}
+
 export interface LLMResponse {
   content: string;
   error?: string;
+  urlProposal?: UrlProposal;
 }
-
-// ─── Lista de modelos :free con fallback ──────────────────────────────────────
-// Ordenados de más a menos capaces. Si el primero falla (429/404), prueba el siguiente.
-
-const FREE_MODELS_POOL = [
-  "mistralai/mistral-small-3.1-24b-instruct:free",
-  "deepseek/deepseek-r1:free",
-  "google/gemma-3-27b-it:free",
-  "meta-llama/llama-3.3-70b-instruct:free",
-  "deepseek/deepseek-r1-distill-llama-70b:free",
-  "google/gemma-3-12b-it:free",
-  "nvidia/llama-3.1-nemotron-nano-8b-v1:free",
-];
 
 // ─── 3 agentes fijos ──────────────────────────────────────────────────────────
 
@@ -48,8 +39,8 @@ export const FIXED_AGENTS: {
   color: string;
 }[] = [
   {
-    id: "agent-mistral",
-    name: "Agente Mistral",
+    id: "agent-mistral-small",
+    name: "Agente Mistral Small",
     provider: "mistral",
     model: "mistral-small-latest",
     label: "Mistral · Mistral Small",
@@ -58,22 +49,22 @@ export const FIXED_AGENTS: {
     color: "#f97316",
   },
   {
-    id: "agent-openrouter-1",
-    name: "Agente OpenRouter 1",
+    id: "agent-llama4-maverick",
+    name: "Agente Llama 4 Maverick",
     provider: "openrouter",
-    model: "auto", // usa FREE_MODELS_POOL con fallback
-    label: "OpenRouter · Mejor modelo libre disponible",
-    freeInfo: "Gratis · fallback automático · Sin tarjeta",
+    model: "meta-llama/llama-4-maverick:free",
+    label: "OpenRouter · Llama 4 Maverick :free",
+    freeInfo: "Gratis · sin coste · Sin tarjeta",
     signupUrl: "https://openrouter.ai/keys",
     color: "#8b5cf6",
   },
   {
-    id: "agent-openrouter-2",
-    name: "Agente OpenRouter 2",
+    id: "agent-llama4-scout",
+    name: "Agente Llama 4 Scout",
     provider: "openrouter",
-    model: "auto", // empieza desde el 2º modelo para diversificar
-    label: "OpenRouter · Modelo libre alternativo",
-    freeInfo: "Gratis · fallback automático · Sin tarjeta",
+    model: "meta-llama/llama-4-scout:free",
+    label: "OpenRouter · Llama 4 Scout :free",
+    freeInfo: "Gratis · sin coste · Sin tarjeta",
     signupUrl: "https://openrouter.ai/keys",
     color: "#06b6d4",
   },
@@ -83,45 +74,71 @@ export const FIXED_AGENTS: {
 
 const DRAFT_PROMPT = `Eres un experto en derecho administrativo español especializado en recursos de multas y sanciones.
 
-Se te proporcionan los datos estructurados de una multa. Redacta un RECURSO DE REPOSICIÓN profesional y completo.
+Se te proporcionan los datos estructurados de una multa. Tu tarea es DOS cosas:
 
-ESTRUCTURA OBLIGATORIA:
+TAREA 1 — Redacta un RECURSO DE REPOSICIÓN profesional y completo con esta estructura:
 1. DATOS DEL RECURRENTE (bloque para rellenar: NOMBRE, DNI, DOMICILIO, TELÉFONO, EMAIL)
 2. ORGANISMO AL QUE SE DIRIGE (usa el organismo exacto de los datos)
 3. HECHOS (usa los datos reales de la multa)
 4. FUNDAMENTOS DE DERECHO
    - Refuta jurídicamente cada artículo citado en la multa
    - Cita jurisprudencia y normativa favorable (Ley 39/2015, LSV, RD 1428/2003...)
-   - Argumenta defectos formales si los hay (notificación, competencia, plazo...)
+   - Argumenta defectos formales si los hay
 5. SÚPLICA (petición concreta: nulidad, anulación o reducción)
 6. LUGAR, FECHA Y FIRMA
 
-Reglas: tono formal y persuasivo, usa solo datos reales, sé exhaustivo, genera el recurso completo.
-Responde ÚNICAMENTE con el texto del recurso. Sin comentarios ni explicaciones previas.`;
+TAREA 2 — Al FINAL del recurso, añade una línea con este formato exacto:
+|||URL_SEDE:{"url":"https://...","nombre":"Nombre del portal","confianza":"alta|media|baja"}|||
 
-const MERGE_PROMPT = `Eres el mejor abogado administrativista de España, especializado en recursos de multas y sanciones de tráfico.
+Determina la URL de la sede electrónica basándote en el organismo sancionador. Ejemplos:
+- DGT / Jefatura de Tráfico → {"url":"https://sede.dgt.gob.es","nombre":"Sede DGT","confianza":"alta"}
+- Ayuntamiento de Madrid → {"url":"https://sede.madrid.es","nombre":"Sede Electrónica Madrid","confianza":"alta"}
+- Ayuntamiento de Barcelona → {"url":"https://seuelectronica.ajuntament.barcelona.cat","nombre":"Seu Electrònica Barcelona","confianza":"alta"}
+- Diputación / SPT Granada → {"url":"https://spgr.es","nombre":"Servicio Provincial Tributario Granada","confianza":"alta"}
+- Diputaciones en general → busca en sede.dip[provincia].es
 
-Se te presentan TRES borradores de recurso administrativo redactados por diferentes IAs para la misma multa.
-Tu misión es crear el RECURSO DEFINITIVO: el más completo, sólido, persuasivo y formalmente correcto posible.
+Reglas para el recurso: tono formal y persuasivo, usa solo datos reales, sé exhaustivo.
+Responde ÚNICAMENTE con el texto del recurso + la línea |||URL_SEDE:...||| al final.`;
 
-INSTRUCCIONES DE FUSIÓN:
-- Analiza los tres borradores y extrae lo mejor de cada uno
-- Mantén TODOS los argumentos jurídicos válidos que aparezcan en cualquiera de los tres
+const MERGE_PROMPT = `Eres el mejor abogado administrativista de España.
+
+Se te presentan TRES borradores de recurso administrativo para la misma multa. Tu misión: crear el RECURSO DEFINITIVO.
+
+INSTRUCCIONES:
+- Extrae lo mejor de cada borrador
+- Mantén TODOS los argumentos jurídicos válidos de los tres
 - Elige la redacción más clara y formal para cada sección
 - Elimina redundancias y contradicciones
-- El resultado debe ser UN SOLO recurso coherente, completo y listo para presentar
+- El resultado debe ser UN SOLO recurso coherente y completo
 
-ESTRUCTURA OBLIGATORIA del recurso definitivo:
-1. DATOS DEL RECURRENTE (bloque para rellenar: NOMBRE, DNI, DOMICILIO, TELÉFONO, EMAIL)
+ESTRUCTURA OBLIGATORIA:
+1. DATOS DEL RECURRENTE (NOMBRE, DNI, DOMICILIO, TELÉFONO, EMAIL)
 2. ORGANISMO AL QUE SE DIRIGE
 3. HECHOS
-4. FUNDAMENTOS DE DERECHO (exhaustivo — recoge todos los argumentos válidos de los tres borradores)
+4. FUNDAMENTOS DE DERECHO (exhaustivo — recoge todos los argumentos válidos)
 5. SÚPLICA
 6. LUGAR, FECHA Y FIRMA
 
-Responde ÚNICAMENTE con el texto del recurso definitivo. Sin comentarios ni comparativa de borradores.`;
+Al FINAL del recurso añade:
+|||URL_SEDE:{"url":"https://...","nombre":"Nombre","confianza":"alta|media|baja"}|||
 
-// ─── Llamada a Mistral ────────────────────────────────────────────────────────
+Responde ÚNICAMENTE con el recurso definitivo + la línea |||URL_SEDE:...||| Sin comentarios.`;
+
+// ─── Parsear la URL del final del contenido ───────────────────────────────────
+
+function extractAndStripUrl(raw: string): { content: string; urlProposal?: UrlProposal } {
+  const match = raw.match(/\|\|\|URL_SEDE:(\{.*?\})\|\|\|/s);
+  if (!match) return { content: raw.trim() };
+  try {
+    const urlProposal = JSON.parse(match[1]) as UrlProposal;
+    const content = raw.replace(/\|\|\|URL_SEDE:.*?\|\|\|/s, "").trim();
+    return { content, urlProposal };
+  } catch {
+    return { content: raw.replace(/\|\|\|URL_SEDE:.*?\|\|\|/s, "").trim() };
+  }
+}
+
+// ─── Llamadas a APIs ──────────────────────────────────────────────────────────
 
 async function callMistral(apiKey: string, model: string, systemPrompt: string, userPrompt: string): Promise<string> {
   const res = await fetch("https://api.mistral.ai/v1/chat/completions", {
@@ -145,79 +162,44 @@ async function callMistral(apiKey: string, model: string, systemPrompt: string, 
   return data.choices?.[0]?.message?.content || "";
 }
 
-// ─── Llamada a OpenRouter con fallback automático ─────────────────────────────
-
-async function callOpenRouterWithFallback(
-  apiKey: string,
-  systemPrompt: string,
-  userPrompt: string,
-  startIndex: number = 0
-): Promise<{ content: string; modelUsed: string }> {
+async function callOpenRouter(apiKey: string, model: string, systemPrompt: string, userPrompt: string): Promise<string> {
   const fullPrompt = `${systemPrompt}\n\n---\n\n${userPrompt}`;
-  const modelsToTry = FREE_MODELS_POOL.slice(startIndex);
-
-  for (const model of modelsToTry) {
-    try {
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-          "HTTP-Referer": "https://recursapp.vercel.app",
-          "X-Title": "RecursApp",
-        },
-        body: JSON.stringify({
-          model,
-          messages: [{ role: "user", content: fullPrompt }],
-          max_tokens: 6000,
-          temperature: 0.3,
-        }),
-      });
-
-      if (res.status === 404 || res.status === 429) {
-        console.log(`Modelo ${model} falló con ${res.status}, probando siguiente...`);
-        continue; // prueba el siguiente
-      }
-
-      if (!res.ok) {
-        const err = await res.text();
-        throw new Error(`OpenRouter ${res.status}: ${err.slice(0, 200)}`);
-      }
-
-      const data = await res.json();
-      const content = data.choices?.[0]?.message?.content || "";
-      if (content.length > 50) return { content, modelUsed: model };
-      continue; // respuesta vacía, prueba el siguiente
-    } catch (err) {
-      if (err instanceof Error && (err.message.includes("404") || err.message.includes("429"))) {
-        console.log(`Modelo ${model} no disponible, probando siguiente...`);
-        continue;
-      }
-      throw err;
-    }
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+      "HTTP-Referer": "https://recursapp.vercel.app",
+      "X-Title": "RecursApp",
+    },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: "user", content: fullPrompt }],
+      max_tokens: 6000,
+      temperature: 0.3,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`OpenRouter ${res.status}: ${err.slice(0, 300)}`);
   }
-
-  throw new Error("Todos los modelos :free están temporalmente no disponibles. Inténtalo de nuevo en unos minutos.");
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || "";
 }
 
 // ─── Agente redactor (fase 2) ─────────────────────────────────────────────────
 
-export async function callAgent(
-  config: AgentConfig,
-  userPrompt: string
-): Promise<LLMResponse> {
+export async function callAgent(config: AgentConfig, userPrompt: string): Promise<LLMResponse> {
   if (!config.apiKey) return { content: "", error: "Sin API key configurada" };
   try {
+    let raw = "";
     if (config.provider === "mistral") {
-      const content = await callMistral(config.apiKey, config.model, DRAFT_PROMPT, userPrompt);
-      return { content };
+      raw = await callMistral(config.apiKey, config.model, DRAFT_PROMPT, userPrompt);
     } else {
-      // Agente 1 empieza en el índice 0, agente 2 en el índice 1 para diversificar modelos
-      const startIndex = config.id === "agent-openrouter-2" ? 1 : 0;
-      const { content, modelUsed } = await callOpenRouterWithFallback(config.apiKey, DRAFT_PROMPT, userPrompt, startIndex);
-      console.log(`${config.id} usó modelo: ${modelUsed}`);
-      return { content };
+      raw = await callOpenRouter(config.apiKey, config.model, DRAFT_PROMPT, userPrompt);
     }
+    const { content, urlProposal } = extractAndStripUrl(raw);
+    return { content, urlProposal };
   } catch (err) {
     return { content: "", error: err instanceof Error ? err.message : "Error desconocido" };
   }
@@ -227,25 +209,36 @@ export async function callAgent(
 
 export async function callMasterAgent(
   apiKeys: { mistral: string; openrouter: string },
-  drafts: { agentName: string; content: string }[]
+  drafts: { agentName: string; content: string }[],
+  parsedText?: string
 ): Promise<LLMResponse> {
   const validDrafts = drafts.filter(d => d.content && d.content.length > 100);
   if (validDrafts.length === 0) return { content: "", error: "No hay borradores válidos para fusionar" };
-  if (validDrafts.length === 1) return { content: validDrafts[0].content };
+  if (validDrafts.length === 1) {
+    const { content, urlProposal } = extractAndStripUrl(validDrafts[0].content);
+    return { content, urlProposal };
+  }
 
-  const userPrompt = validDrafts
-    .map((d, i) => `=== BORRADOR ${i + 1} (${d.agentName}) ===\n\n${d.content}`)
-    .join("\n\n" + "─".repeat(60) + "\n\n");
+  const userPrompt = [
+    parsedText ? `=== DATOS ORIGINALES DE LA MULTA ===\n${parsedText}\n\n` : "",
+    ...validDrafts.map((d, i) => `=== BORRADOR ${i + 1} (${d.agentName}) ===\n\n${d.content}`)
+  ].join("\n\n" + "─".repeat(60) + "\n\n");
 
   try {
     if (apiKeys.mistral) {
-      const content = await callMistral(apiKeys.mistral, "mistral-large-latest", MERGE_PROMPT, userPrompt);
-      if (content.length > 100) return { content };
+      const raw = await callMistral(apiKeys.mistral, "mistral-large-latest", MERGE_PROMPT, userPrompt);
+      if (raw.length > 100) {
+        const { content, urlProposal } = extractAndStripUrl(raw);
+        return { content, urlProposal };
+      }
     }
-    // Fallback: OpenRouter con pool
+    // Fallback: Llama 4 Maverick
     if (apiKeys.openrouter) {
-      const { content } = await callOpenRouterWithFallback(apiKeys.openrouter, MERGE_PROMPT, userPrompt, 0);
-      if (content.length > 100) return { content };
+      const raw = await callOpenRouter(apiKeys.openrouter, "meta-llama/llama-4-maverick:free", MERGE_PROMPT, userPrompt);
+      if (raw.length > 100) {
+        const { content, urlProposal } = extractAndStripUrl(raw);
+        return { content, urlProposal };
+      }
     }
     return { content: "", error: "No se pudo generar el recurso definitivo" };
   } catch (err) {
@@ -272,7 +265,7 @@ export function buildUserPrompt(
   if (additionalContext) {
     prompt += `=== CONTEXTO ADICIONAL DEL USUARIO ===\n${additionalContext}\n\n`;
   }
-  prompt += `Con todos estos datos, redacta el recurso administrativo completo y profesional.`;
+  prompt += `Con todos estos datos, realiza las dos tareas descritas.`;
   return prompt;
 }
 
@@ -285,7 +278,7 @@ export function generateInstructions(): string {
    • Verifica el plazo exacto en tu documento de multa
 
 2. DÓNDE PRESENTARLO
-   • Sede electrónica del organismo sancionador
+   • Sede electrónica del organismo sancionador (ver enlace arriba)
    • Presencialmente en su registro de entrada
    • Por correo certificado con acuse de recibo
    • En cualquier registro oficial (Ley 39/2015 art. 16.4)
