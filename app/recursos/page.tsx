@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import {
   Scale, ArrowLeft, Upload, Plus, X, Zap, FileText,
-  Download, AlertCircle, CheckCircle, Clock, ChevronDown, ChevronUp, Star
+  Download, AlertCircle, CheckCircle, Clock, ChevronDown, ChevronUp, Star, ExternalLink
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { useDropzone } from "react-dropzone";
@@ -25,6 +25,23 @@ interface AgentResult {
   status: "pending" | "running" | "done" | "error" | "skipped";
   content: string;
   error?: string;
+  urlProposal?: { url: string; nombre: string; confianza: string } | null;
+}
+
+interface PlazoInfo {
+  fechaNotificacion: string;
+  fechaLimite: string;
+  fechaLimiteISO: string;
+  diasRestantes: number;
+  tipoRecurso: string;
+  baseLegal: string;
+  urgencia: "ok" | "aviso" | "urgente" | "vencido";
+}
+
+interface PresentacionUrl {
+  url: string;
+  nombre: string;
+  confianza: string;
 }
 
 export default function RecursosPage() {
@@ -32,14 +49,15 @@ export default function RecursosPage() {
   const [multaFile, setMultaFile] = useState<UploadedFile | null>(null);
   const [supportFiles, setSupportFiles] = useState<UploadedFile[]>([]);
   const [additionalContext, setAdditionalContext] = useState("");
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [agentResults, setAgentResults] = useState<AgentResult[]>([]);
   const [masterRecurso, setMasterRecurso] = useState("");
   const [masterError, setMasterError] = useState("");
   const [instructions, setInstructions] = useState("");
   const [parsedText, setParsedText] = useState("");
-  const [showParsed, setShowParsed] = useState(true); // expandido por defecto
-  const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
+  const [presentacionUrl, setPresentacionUrl] = useState<PresentacionUrl | null>(null);
+  const [plazoInfo, setPlazoInfo] = useState<PlazoInfo | null>(null);
+  const [showParsed, setShowParsed] = useState(true);
+  const [activeTab, setActiveTab] = useState<"definitivo" | "borrador-0" | "borrador-1" | "borrador-2">("definitivo");
 
   const { getRootProps: getMultaProps, getInputProps: getMultaInputProps, isDragActive: isMultaDrag } = useDropzone({
     accept: { "application/pdf": [".pdf"], "image/*": [".jpg", ".jpeg", ".png", ".webp"] },
@@ -48,7 +66,10 @@ export default function RecursosPage() {
       if (files[0]) {
         const f = files[0];
         const reader = new FileReader();
-        reader.onload = () => setMultaFile({ file: f, name: f.name, type: f.type, preview: f.type.startsWith("image/") ? reader.result as string : undefined });
+        reader.onload = () => setMultaFile({
+          file: f, name: f.name, type: f.type,
+          preview: f.type.startsWith("image/") ? reader.result as string : undefined
+        });
         reader.readAsDataURL(f);
       }
     },
@@ -69,7 +90,6 @@ export default function RecursosPage() {
 
   const handleAnalyze = async () => {
     if (!multaFile) { toast.error("Sube el documento de la multa primero"); return; }
-    setIsAnalyzing(true);
     setStep(3);
     try {
       const multaBase64 = await fileToBase64(multaFile.file);
@@ -95,12 +115,14 @@ export default function RecursosPage() {
       setMasterError(data.masterError || "");
       setInstructions(data.instructions || "");
       if (data.parsedText) setParsedText(data.parsedText);
+      if (data.presentacionUrl) setPresentacionUrl(data.presentacionUrl);
+      if (data.plazoInfo) setPlazoInfo(data.plazoInfo);
+      setActiveTab("definitivo");
       setStep(4);
     } catch (err) {
       toast.error("Error: " + (err instanceof Error ? err.message : "Desconocido"));
       setStep(2);
     }
-    setIsAnalyzing(false);
   };
 
   const handleDownload = async (content: string, filename: string) => {
@@ -123,10 +145,23 @@ export default function RecursosPage() {
   const handleReset = () => {
     setStep(1); setMultaFile(null); setSupportFiles([]); setAdditionalContext("");
     setAgentResults([]); setMasterRecurso(""); setMasterError("");
-    setInstructions(""); setParsedText(""); setShowParsed(false); setExpandedAgent(null);
+    setInstructions(""); setParsedText(""); setPresentacionUrl(null);
+    setShowParsed(true); setActiveTab("definitivo"); setPlazoInfo(null);
   };
 
   const successCount = agentResults.filter(r => r.status === "done").length;
+  const doneAgents = agentResults.filter(r => r.status === "done");
+
+  // Current content shown in main panel
+  const currentContent = activeTab === "definitivo"
+    ? masterRecurso
+    : doneAgents[parseInt(activeTab.replace("borrador-", ""))]?.content || "";
+  const currentLabel = activeTab === "definitivo"
+    ? "Recurso Definitivo"
+    : doneAgents[parseInt(activeTab.replace("borrador-", ""))]?.label || "";
+  const currentFilename = activeTab === "definitivo"
+    ? `recurso-DEFINITIVO-${Date.now()}.docx`
+    : `recurso-borrador-${parseInt(activeTab.replace("borrador-", "")) + 1}-${Date.now()}.docx`;
 
   return (
     <main className="min-h-screen">
@@ -145,12 +180,10 @@ export default function RecursosPage() {
           </div>
         </div>
         <Link href="/settings" className="text-sm opacity-50 hover:opacity-100 transition-opacity"
-          style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "12px" }}>
-          ⚙ API Keys
-        </Link>
+          style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "12px" }}>⚙ API Keys</Link>
       </nav>
 
-      {/* Steps indicator */}
+      {/* Steps */}
       <div className="flex items-center justify-center gap-0 px-8 py-8">
         {[{ n: 1, label: "Multa" }, { n: 2, label: "Contexto" }, { n: 3, label: "Analizando" }, { n: 4, label: "Recursos" }].map(({ n, label }, i) => (
           <div key={n} className="flex items-center">
@@ -240,7 +273,7 @@ export default function RecursosPage() {
             {supportFiles.length > 0 && (
               <div className="space-y-3 mb-6">
                 {supportFiles.map((sf, idx) => (
-                  <div key={idx} className="card-dark rounded-sm p-4" style={{ borderColor: "#2a2a38" }}>
+                  <div key={idx} className="card-dark rounded-sm p-4">
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-sm font-semibold truncate max-w-xs flex items-center gap-2">
                         <FileText className="w-4 h-4 flex-shrink-0" style={{ color: "#c9a84c" }} /> {sf.name}
@@ -272,20 +305,20 @@ export default function RecursosPage() {
           </div>
         )}
 
-        {/* STEP 3: Analyzing */}
+        {/* STEP 3 */}
         {step === 3 && (
           <div className="animate-fade-up">
             <h1 className="font-display text-4xl mb-2">Trabajando…</h1>
-            <p className="opacity-60 mb-8">4 fases: parseo → 3 borradores → recurso definitivo.</p>
+            <p className="opacity-60 mb-8">Parseo → 3 borradores → recurso definitivo.</p>
             <div className="space-y-4">
               {[
-                { label: "Leyendo el documento", sublabel: "OpenRouter · parseo visual", color: "#c9a84c" },
+                { label: "Leyendo el documento", sublabel: "OpenRouter · parseo visual + URL", color: "#c9a84c" },
                 { label: "Agente Mistral Small", sublabel: "redactando borrador 1", color: "#f97316" },
-                { label: "Agente Llama 3.3 70B", sublabel: "redactando borrador 2", color: "#8b5cf6" },
-                { label: "Agente DeepSeek V3", sublabel: "redactando borrador 3", color: "#06b6d4" },
-                { label: "Agente Maestro", sublabel: "Mistral Large fusionando los 3 borradores", color: "#e8cc7a" },
+                { label: "Agente Llama 4 Maverick", sublabel: "redactando borrador 2", color: "#8b5cf6" },
+                { label: "Agente Llama 4 Scout", sublabel: "redactando borrador 3", color: "#06b6d4" },
+                { label: "Agente Maestro · Mistral Large", sublabel: "fusionando los 3 borradores", color: "#e8cc7a" },
               ].map((item, i) => (
-                <div key={i} className="card-dark rounded-sm p-5" style={{ borderColor: "#2a2a38" }}>
+                <div key={i} className="card-dark rounded-sm p-5">
                   <div className="flex items-center gap-3 mb-3">
                     <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
                       style={{ background: `${item.color}20`, border: `1px solid ${item.color}40`, color: item.color, fontFamily: "JetBrains Mono, monospace" }}>
@@ -308,10 +341,12 @@ export default function RecursosPage() {
           </div>
         )}
 
-        {/* STEP 4: Results */}
+        {/* STEP 4 */}
         {step === 4 && (
           <div className="animate-fade-up">
-            <div className="mb-8">
+
+            {/* Header */}
+            <div className="mb-6">
               <div className="flex items-center gap-2 mb-2">
                 <CheckCircle className="w-5 h-5" style={{ color: "#4ade80" }} />
                 <span className="text-sm" style={{ color: "#4ade80", fontFamily: "JetBrains Mono, monospace", fontSize: "12px" }}>
@@ -321,53 +356,191 @@ export default function RecursosPage() {
               <h1 className="font-display text-4xl">Tu recurso está listo</h1>
             </div>
 
-            {/* ── RECURSO DEFINITIVO (destacado) ── */}
-            <div className="rounded-sm overflow-hidden mb-8"
-              style={{ border: "2px solid #c9a84c60", background: "linear-gradient(160deg, #1a1508, #1a1a24)", boxShadow: "0 0 40px #c9a84c15" }}>
-              {/* Header */}
-              <div className="px-6 py-5 flex items-center justify-between"
-                style={{ borderBottom: "1px solid #c9a84c30", background: "#c9a84c08" }}>
+            {/* ── BANNER PLAZO MÁXIMO ── */}
+            {plazoInfo && (() => {
+              const urgencyConfig = {
+                ok:      { bg: "#0a1a0a", border: "#4ade8040", color: "#4ade80", icon: "📅", label: "Plazo OK" },
+                aviso:   { bg: "#1a140a", border: "#f9a80040", color: "#f9a800", icon: "⚠️", label: "Plazo próximo" },
+                urgente: { bg: "#1a0a0a", border: "#f8717140", color: "#f87171", icon: "🚨", label: "¡URGENTE!" },
+                vencido: { bg: "#1a0a0a", border: "#f8717170", color: "#f87171", icon: "❌", label: "Plazo vencido" },
+              }[plazoInfo.urgencia];
+              return (
+                <div className="rounded-sm px-6 py-5 mb-4"
+                  style={{ background: urgencyConfig.bg, border: `2px solid ${urgencyConfig.border}` }}>
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex items-start gap-4">
+                      <div className="text-2xl flex-shrink-0 mt-0.5">{urgencyConfig.icon}</div>
+                      <div>
+                        <div className="flex items-center gap-3 mb-1">
+                          <span className="font-display text-lg" style={{ color: urgencyConfig.color }}>
+                            {urgencyConfig.label}
+                          </span>
+                          <span className="text-xs px-2 py-0.5 rounded font-bold"
+                            style={{ background: `${urgencyConfig.color}20`, color: urgencyConfig.color, fontFamily: "JetBrains Mono, monospace" }}>
+                            {plazoInfo.urgencia === "vencido"
+                              ? `Venció hace ${Math.abs(plazoInfo.diasRestantes)} días`
+                              : plazoInfo.diasRestantes === 0
+                              ? "¡Vence HOY!"
+                              : `${plazoInfo.diasRestantes} días restantes`}
+                          </span>
+                        </div>
+                        <div className="text-sm opacity-80 mb-2" style={{ fontFamily: "Crimson Text, serif", fontSize: "16px" }}>
+                          Fecha límite de presentación:{" "}
+                          <strong style={{ color: urgencyConfig.color }}>{plazoInfo.fechaLimite}</strong>
+                        </div>
+                        <div className="text-xs opacity-50 space-y-0.5" style={{ fontFamily: "JetBrains Mono, monospace" }}>
+                          <div>Tipo: {plazoInfo.tipoRecurso}</div>
+                          <div>Base legal: {plazoInfo.baseLegal}</div>
+                          <div>Notificación recibida: {plazoInfo.fechaNotificacion}</div>
+                        </div>
+                      </div>
+                    </div>
+                    {plazoInfo.urgencia !== "vencido" && (
+                      <div className="flex-shrink-0 text-right">
+                        <div className="font-display text-4xl font-bold" style={{ color: urgencyConfig.color, lineHeight: 1 }}>
+                          {plazoInfo.diasRestantes}
+                        </div>
+                        <div className="text-xs opacity-60 mt-1" style={{ fontFamily: "JetBrains Mono, monospace" }}>días</div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* ── LINK SEDE ELECTRÓNICA ── */
+            {presentacionUrl && (
+              <a href={presentacionUrl.url} target="_blank" rel="noopener noreferrer"
+                className="flex items-center justify-between px-6 py-4 rounded-sm mb-6 transition-all hover:scale-[1.01] group"
+                style={{ background: "linear-gradient(135deg, #0a1a0a, #111118)", border: "2px solid #4ade8040", boxShadow: "0 0 20px #4ade8010" }}>
                 <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 rounded-full flex items-center justify-center"
-                    style={{ background: "linear-gradient(135deg, #c9a84c, #9a7530)", boxShadow: "0 0 20px #c9a84c40" }}>
-                    <Star className="w-5 h-5" style={{ color: "#0a0a0f" }} />
+                  <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0"
+                    style={{ background: "#4ade8015", border: "1px solid #4ade8040" }}>
+                    <ExternalLink className="w-5 h-5" style={{ color: "#4ade80" }} />
                   </div>
                   <div>
-                    <div className="font-display text-xl" style={{ color: "#e8cc7a" }}>Recurso Definitivo</div>
-                    <div className="text-xs mt-0.5" style={{ color: "#c9a84c", fontFamily: "JetBrains Mono, monospace" }}>
-                      Fusión de {successCount} borradores · Mistral Large
+                    <div className="font-display text-base" style={{ color: "#4ade80" }}>
+                      Presentar recurso electrónicamente
+                    </div>
+                    <div className="text-xs mt-0.5 opacity-70" style={{ fontFamily: "JetBrains Mono, monospace", color: "#9898b0" }}>
+                      {presentacionUrl.nombre} · {presentacionUrl.url}
                     </div>
                   </div>
                 </div>
-                {masterRecurso && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs px-2 py-0.5 rounded" style={{
+                    background: presentacionUrl.confianza === "alta" ? "#4ade8015" : "#f9731615",
+                    color: presentacionUrl.confianza === "alta" ? "#4ade80" : "#f97316",
+                    border: `1px solid ${presentacionUrl.confianza === "alta" ? "#4ade8030" : "#f9731630"}`,
+                    fontFamily: "JetBrains Mono, monospace",
+                  }}>
+                    {presentacionUrl.confianza === "alta" ? "✓ verificado" : "⚠ verifica URL"}
+                  </span>
+                  <ExternalLink className="w-4 h-4 opacity-40 group-hover:opacity-100 transition-opacity" style={{ color: "#4ade80" }} />
+                </div>
+              </a>
+            )}
+
+            {/* ── TABS: Definitivo + 3 borradores ── */}
+            <div className="rounded-sm overflow-hidden mb-6"
+              style={{ border: "2px solid #c9a84c60", background: "linear-gradient(160deg, #1a1508, #1a1a24)", boxShadow: "0 0 40px #c9a84c15" }}>
+
+              {/* Tab bar */}
+              <div className="flex overflow-x-auto" style={{ borderBottom: "1px solid #c9a84c20", background: "#0f0e08" }}>
+                {/* Tab definitivo */}
+                <button
+                  onClick={() => setActiveTab("definitivo")}
+                  className="flex items-center gap-2 px-5 py-3.5 text-sm font-semibold whitespace-nowrap transition-all flex-shrink-0"
+                  style={{
+                    borderBottom: activeTab === "definitivo" ? "2px solid #c9a84c" : "2px solid transparent",
+                    color: activeTab === "definitivo" ? "#e8cc7a" : "#666688",
+                    background: activeTab === "definitivo" ? "#c9a84c08" : "transparent",
+                    fontFamily: "Crimson Text, serif",
+                    fontSize: "15px",
+                  }}>
+                  <Star className="w-3.5 h-3.5" style={{ color: activeTab === "definitivo" ? "#c9a84c" : "#666688" }} />
+                  Definitivo
+                </button>
+
+                {/* Tabs borradores */}
+                {doneAgents.map((agent, i) => (
+                  <button key={agent.agentId}
+                    onClick={() => setActiveTab(`borrador-${i}` as "borrador-0" | "borrador-1" | "borrador-2")}
+                    className="flex items-center gap-2 px-4 py-3.5 text-sm whitespace-nowrap transition-all flex-shrink-0"
+                    style={{
+                      borderBottom: activeTab === `borrador-${i}` ? `2px solid ${agent.color}` : "2px solid transparent",
+                      color: activeTab === `borrador-${i}` ? agent.color : "#666688",
+                      background: activeTab === `borrador-${i}` ? `${agent.color}08` : "transparent",
+                      fontFamily: "JetBrains Mono, monospace",
+                      fontSize: "12px",
+                    }}>
+                    <div className="w-2 h-2 rounded-full" style={{ background: agent.color }} />
+                    Borrador {i + 1}
+                  </button>
+                ))}
+
+                {/* Agentes con error */}
+                {agentResults.filter(r => r.status === "error" || r.status === "skipped").map((agent) => (
+                  <div key={agent.agentId}
+                    className="flex items-center gap-2 px-4 py-3.5 text-sm whitespace-nowrap flex-shrink-0 opacity-40"
+                    style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "12px", color: "#666688" }}>
+                    <div className="w-2 h-2 rounded-full bg-red-500" />
+                    {agent.status === "skipped" ? "Sin key" : "Error"}
+                  </div>
+                ))}
+              </div>
+
+              {/* Tab content header */}
+              <div className="px-6 py-4 flex items-center justify-between" style={{ borderBottom: "1px solid #1e1e2a" }}>
+                <div>
+                  <div className="font-display text-lg" style={{ color: activeTab === "definitivo" ? "#e8cc7a" : "#f9f6ef" }}>
+                    {currentLabel}
+                  </div>
+                  {activeTab === "definitivo" && (
+                    <div className="text-xs mt-0.5" style={{ color: "#c9a84c", fontFamily: "JetBrains Mono, monospace" }}>
+                      Fusión de {successCount} borradores · Mistral Large
+                    </div>
+                  )}
+                </div>
+                {currentContent && (
                   <button
-                    onClick={() => handleDownload(masterRecurso, `recurso-DEFINITIVO-${Date.now()}.docx`)}
-                    className="flex items-center gap-2 px-5 py-2.5 rounded-sm font-semibold transition-all hover:scale-[1.02]"
-                    style={{ background: "linear-gradient(135deg, #c9a84c, #9a7530)", color: "#0a0a0f", fontFamily: "Crimson Text, serif", fontSize: "16px", boxShadow: "0 0 20px #c9a84c30" }}>
-                    <Download className="w-4 h-4" /> Descargar .docx
+                    onClick={() => handleDownload(currentContent, currentFilename)}
+                    className="flex items-center gap-2 px-4 py-2 rounded-sm font-semibold transition-all hover:scale-[1.02]"
+                    style={{
+                      background: activeTab === "definitivo" ? "linear-gradient(135deg, #c9a84c, #9a7530)" : "#1a1a24",
+                      color: activeTab === "definitivo" ? "#0a0a0f" : "#9898b0",
+                      border: activeTab === "definitivo" ? "none" : "1px solid #2a2a38",
+                      fontFamily: "Crimson Text, serif", fontSize: "15px",
+                      boxShadow: activeTab === "definitivo" ? "0 0 20px #c9a84c30" : "none",
+                    }}>
+                    <Download className="w-4 h-4" /> .docx
                   </button>
                 )}
               </div>
 
-              {/* Content */}
-              {masterRecurso ? (
+              {/* Tab content body */}
+              {currentContent ? (
                 <div className="px-6 py-6">
-                  <div className="prose-legal whitespace-pre-wrap max-h-[600px] overflow-y-auto pr-2"
-                    style={{ fontFamily: "Crimson Text, serif", fontSize: "16px", color: "#e8e8ef", lineHeight: "1.8" }}>
-                    {masterRecurso}
+                  <div className="whitespace-pre-wrap overflow-y-auto pr-2"
+                    style={{
+                      fontFamily: "Crimson Text, serif",
+                      fontSize: "16px",
+                      color: "#e8e8ef",
+                      lineHeight: "1.8",
+                      maxHeight: "70vh",
+                    }}>
+                    {currentContent}
                   </div>
                 </div>
-              ) : (
+              ) : activeTab === "definitivo" && masterError ? (
                 <div className="px-6 py-8 text-center">
                   <AlertCircle className="w-8 h-8 mx-auto mb-3" style={{ color: "#f87171" }} />
-                  <p style={{ color: "#f87171", fontFamily: "JetBrains Mono, monospace", fontSize: "13px" }}>
-                    {masterError || "No se pudo generar el recurso definitivo"}
-                  </p>
+                  <p style={{ color: "#f87171", fontFamily: "JetBrains Mono, monospace", fontSize: "13px" }}>{masterError}</p>
                 </div>
-              )}
+              ) : null}
             </div>
 
-            {/* ── Datos parseados ── */}
+            {/* ── Parseo del documento ── */}
             {parsedText && (
               <div className="rounded-sm overflow-hidden mb-6" style={{ border: "1px solid #2a2a38", background: "#111118" }}>
                 <button onClick={() => setShowParsed(p => !p)}
@@ -393,63 +566,6 @@ export default function RecursosPage() {
               </div>
             )}
 
-            {/* ── Borradores individuales ── */}
-            <div className="mb-6">
-              <p className="text-xs uppercase tracking-widest mb-4 opacity-40" style={{ fontFamily: "JetBrains Mono, monospace" }}>
-                Borradores individuales
-              </p>
-              <div className="space-y-3">
-                {agentResults.map((agent) => (
-                  <div key={agent.agentId} className="rounded-sm overflow-hidden"
-                    style={{ border: `1px solid ${agent.status === "done" ? `${agent.color}25` : "#2a2a38"}`, background: "#111118" }}>
-                    <div className="flex items-center justify-between px-5 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
-                          style={{ background: `${agent.color}18`, border: `1px solid ${agent.color}35`, color: agent.color, fontFamily: "JetBrains Mono, monospace" }}>
-                          {agent.agentId === "agent-mistral-small" ? "MS" : agent.agentId === "agent-llama4-maverick" ? "M4" : "L4"}
-                        </div>
-                        <div>
-                          <div className="text-sm font-semibold" style={{ fontFamily: "Crimson Text, serif", fontSize: "16px" }}>{agent.label}</div>
-                          {agent.status === "done" && (
-                            <div className="text-xs" style={{ color: "#4ade80", fontFamily: "JetBrains Mono, monospace" }}>✓ {agent.content.length} chars</div>
-                          )}
-                          {agent.status === "error" && (
-                            <div className="text-xs truncate max-w-xs" style={{ color: "#f87171", fontFamily: "JetBrains Mono, monospace" }}>{agent.error}</div>
-                          )}
-                          {agent.status === "skipped" && (
-                            <div className="text-xs" style={{ color: "#666688", fontFamily: "JetBrains Mono, monospace" }}>Sin API key</div>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {agent.status === "done" && (
-                          <>
-                            <button onClick={() => handleDownload(agent.content, `recurso-${agent.agentId}-${Date.now()}.docx`)}
-                              className="flex items-center gap-1 px-3 py-1.5 rounded text-xs border transition-all hover:opacity-100 opacity-60"
-                              style={{ borderColor: `${agent.color}40`, color: agent.color, fontFamily: "JetBrains Mono, monospace" }}>
-                              <Download className="w-3 h-3" /> .docx
-                            </button>
-                            <button onClick={() => setExpandedAgent(expandedAgent === agent.agentId ? null : agent.agentId)}
-                              className="p-1.5 opacity-40 hover:opacity-100 transition-opacity">
-                              {expandedAgent === agent.agentId ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                    {expandedAgent === agent.agentId && agent.status === "done" && (
-                      <div className="px-5 pb-5 border-t" style={{ borderColor: "#1e1e2a" }}>
-                        <div className="mt-4 whitespace-pre-wrap max-h-96 overflow-y-auto text-sm leading-relaxed"
-                          style={{ fontFamily: "Crimson Text, serif", fontSize: "15px", color: "#b8b8c8" }}>
-                          {agent.content}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-
             {/* ── Instrucciones ── */}
             <div className="rounded-sm p-8 mb-8" style={{ background: "#c9a84c08", border: "1px solid #c9a84c30" }}>
               <h2 className="font-display text-2xl mb-4" style={{ color: "#e8cc7a" }}>📋 Instrucciones de presentación</h2>
@@ -458,10 +574,9 @@ export default function RecursosPage() {
               </div>
             </div>
 
-            {/* Reset */}
             <div className="flex justify-center">
               <button onClick={handleReset}
-                className="flex items-center gap-2 px-8 py-4 rounded-sm font-semibold text-lg border transition-all"
+                className="px-8 py-4 rounded-sm font-semibold text-lg border transition-all"
                 style={{ borderColor: "#2a2a38", color: "#9898b0", fontFamily: "Playfair Display, serif" }}>
                 Nueva multa
               </button>
