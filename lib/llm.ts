@@ -127,14 +127,14 @@ Responde ÚNICAMENTE con el recurso definitivo + la línea |||URL_SEDE:...||| Si
 // ─── Parsear la URL del final del contenido ───────────────────────────────────
 
 function extractAndStripUrl(raw: string): { content: string; urlProposal?: UrlProposal } {
-  const match = raw.match(/\|\|\|URL_SEDE:(\{.*?\})\|\|\|/s);
+  const match = raw.match(/\|\|\|URL_SEDE:(\{[\s\S]*?\})\|\|\|/);
   if (!match) return { content: raw.trim() };
   try {
     const urlProposal = JSON.parse(match[1]) as UrlProposal;
-    const content = raw.replace(/\|\|\|URL_SEDE:.*?\|\|\|/s, "").trim();
+    const content = raw.replace(/\|\|\|URL_SEDE:[\s\S]*?\|\|\|/, "").trim();
     return { content, urlProposal };
   } catch {
-    return { content: raw.replace(/\|\|\|URL_SEDE:.*?\|\|\|/s, "").trim() };
+    return { content: raw.replace(/\|\|\|URL_SEDE:[\s\S]*?\|\|\|/, "").trim() };
   }
 }
 
