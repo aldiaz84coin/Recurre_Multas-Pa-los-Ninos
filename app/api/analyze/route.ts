@@ -1,14 +1,5 @@
 /**
  * app/api/analyze/route.ts
- *
- * FASE 1 — Parseo visual (OpenRouter/auto · OPENROUTER_API_KEY)
- *   Lee la imagen/PDF y extrae todos los datos estructurados
- *
- * FASE 2 — 3 agentes en paralelo (Mistral Small + Llama 3.3 + DeepSeek V3)
- *   Cada uno redacta su propio borrador de recurso sobre el texto parseado
- *
- * FASE 3 — Agente maestro fusionador (Mistral Large o DeepSeek fallback)
- *   Recibe los 3 borradores y genera el RECURSO DEFINITIVO unificado
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -16,8 +7,6 @@ import pdfParse from "pdf-parse";
 import { callAgent, callMasterAgent, buildUserPrompt, generateInstructions, FIXED_AGENTS } from "@/lib/llm";
 
 export const maxDuration = 120;
-
-// ─── Prompt de parseo ─────────────────────────────────────────────────────────
 
 const PARSE_PROMPT = `Eres un asistente especializado en leer documentos de multas y sanciones administrativas españolas.
 
@@ -53,10 +42,12 @@ DOMICILIO:
 
 Sé exhaustivo. No inventes datos — solo extrae lo que está escrito en el documento.`;
 
-// ─── Fase 1: Parseo con OpenRouter/auto ──────────────────────────────────────
-
-async function parseDocument(openrouterApiKey: string, base64: string, mimeType: string, fileName: string): Promise<string> {
-  // PDFs con texto: intentar pdf-parse primero
+async function parseDocument(
+  openrouterApiKey: string,
+  base64: string,
+  mimeType: string,
+  fileName: string
+): Promise<string> {
   if (mimeType === "application/pdf") {
     try {
       const buffer = Buffer.from(base64, "base64");
@@ -87,7 +78,6 @@ async function parseDocument(openrouterApiKey: string, base64: string, mimeType:
     } catch { /* fallback a visión */ }
   }
 
-  // Imagen o PDF escaneado: visión directa
   const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -118,16 +108,12 @@ async function parseDocument(openrouterApiKey: string, base64: string, mimeType:
   return data.choices?.[0]?.message?.content || `[No se pudo parsear: ${fileName}]`;
 }
 
-// ─── Keys del servidor ────────────────────────────────────────────────────────
-
 function getServerApiKeys() {
   return {
     mistral: process.env.MISTRAL_API_KEY || "",
     openrouter: process.env.OPENROUTER_API_KEY || "",
   };
 }
-
-// ─── Handler principal ────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
   try {
@@ -141,10 +127,13 @@ export async function POST(req: NextRequest) {
     const apiKeys = getServerApiKeys();
 
     if (!apiKeys.openrouter) {
-      return NextResponse.json({ error: "Se necesita OPENROUTER_API_KEY. Configúrala en Vercel." }, { status: 500 });
+      return NextResponse.json(
+        { error: "Se necesita OPENROUTER_API_KEY. Configúrala en Vercel." },
+        { status: 500 }
+      );
     }
 
-    // ── FASE 1: Parsear ──────────────────────────────────────────────────────
+    // FASE 1: Parsear
     console.log("Fase 1: parseando documento...");
     let parsedText: string;
     try {
@@ -157,10 +146,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ── FASE 2: 3 agentes en paralelo ────────────────────────────────────────
+    // FASE 2: 3 agentes en paralelo
     console.log("Fase 2: 3 agentes redactando en paralelo...");
     const supportFilesData = (supportFiles || []).map((sf: { name: string; context: string }) => ({
-      name: sf.name, context: sf.context || "",
+      name: sf.name,
+      context: sf.context || "",
     }));
     const userPrompt = buildUserPrompt(parsedText, supportFilesData, additionalContext || "");
 
@@ -168,15 +158,24 @@ export async function POST(req: NextRequest) {
       const key = apiKeys[agentDef.provider];
       if (!key) {
         return {
-          agentId: agentDef.id, agentName: agentDef.name, label: agentDef.label, color: agentDef.color,
-          status: "skipped" as const, content: "", error: "Sin API key configurada",
+          agentId: agentDef.id,
+          agentName: agentDef.name,
+          label: agentDef.label,
+          color: agentDef.color,
+          status: "skipped" as const,
+          content: "",
+          error: "Sin API key configurada",
         };
       }
       const result = await callAgent({ ...agentDef, apiKey: key, enabled: true }, userPrompt);
       return {
-        agentId: agentDef.id, agentName: agentDef.name, label: agentDef.label, color: agentDef.color,
+        agentId: agentDef.id,
+        agentName: agentDef.name,
+        label: agentDef.label,
+        color: agentDef.color,
         status: result.error ? ("error" as const) : ("done" as const),
-        content: result.content, error: result.error,
+        content: result.content,
+        error: result.error,
       };
     });
 
@@ -184,17 +183,21 @@ export async function POST(req: NextRequest) {
     const agentResults = settled.map((r, idx) => {
       if (r.status === "fulfilled") return r.value;
       return {
-        agentId: FIXED_AGENTS[idx].id, agentName: FIXED_AGENTS[idx].name,
-        label: FIXED_AGENTS[idx].label, color: FIXED_AGENTS[idx].color,
-        status: "error" as const, content: "", error: (r.reason as Error)?.message || "Error desconocido",
+        agentId: FIXED_AGENTS[idx].id,
+        agentName: FIXED_AGENTS[idx].name,
+        label: FIXED_AGENTS[idx].label,
+        color: FIXED_AGENTS[idx].color,
+        status: "error" as const,
+        content: "",
+        error: (r.reason as Error)?.message || "Error desconocido",
       };
     });
 
-    // ── FASE 3: Agente maestro fusiona los borradores ────────────────────────
+    // FASE 3: Agente maestro fusiona
     console.log("Fase 3: agente maestro fusionando borradores...");
     const successfulDrafts = agentResults
-      .filter(r => r.status === "done" && r.content)
-      .map(r => ({ agentName: r.label, content: r.content }));
+      .filter((r) => r.status === "done" && r.content)
+      .map((r) => ({ agentName: r.label, content: r.content }));
 
     const masterResult = await callMasterAgent(apiKeys, successfulDrafts);
 
@@ -202,12 +205,15 @@ export async function POST(req: NextRequest) {
       agentResults,
       masterRecurso: masterResult.content,
       masterError: masterResult.error,
-      // ← Ahora se pasa parsedText para detectar el organismo y personalizar los links
+      // parsedText se pasa para detectar el organismo y generar links correctos
       instructions: generateInstructions(parsedText),
       parsedText,
     });
   } catch (err) {
     console.error("Analyze error:", err);
-    return NextResponse.json({ error: err instanceof Error ? err.message : "Error interno" }, { status: 500 });
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Error interno" },
+      { status: 500 }
+    );
   }
 }
