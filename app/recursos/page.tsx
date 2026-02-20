@@ -38,7 +38,7 @@ export default function RecursosPage() {
   const [masterError, setMasterError] = useState("");
   const [instructions, setInstructions] = useState("");
   const [parsedText, setParsedText] = useState("");
-  const [showParsed, setShowParsed] = useState(false);
+  const [showParsed, setShowParsed] = useState(true); // expandido por defecto
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
 
   const { getRootProps: getMultaProps, getInputProps: getMultaInputProps, isDragActive: isMultaDrag } = useDropzone({
@@ -384,7 +384,7 @@ export default function RecursosPage() {
                 </button>
                 {showParsed && (
                   <div className="px-6 pb-6 border-t" style={{ borderColor: "#1e1e2a" }}>
-                    <pre className="mt-4 text-xs leading-relaxed whitespace-pre-wrap overflow-auto max-h-72"
+                    <pre className="mt-4 text-xs leading-relaxed whitespace-pre-wrap overflow-auto"
                       style={{ fontFamily: "JetBrains Mono, monospace", color: "#9898b0" }}>
                       {parsedText}
                     </pre>
@@ -406,7 +406,7 @@ export default function RecursosPage() {
                       <div className="flex items-center gap-3">
                         <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
                           style={{ background: `${agent.color}18`, border: `1px solid ${agent.color}35`, color: agent.color, fontFamily: "JetBrains Mono, monospace" }}>
-                          {agent.agentId === "agent-mistral" ? "M" : agent.agentId === "agent-openrouter-1" ? "L" : "D"}
+                          {agent.agentId === "agent-mistral-small" ? "MS" : agent.agentId === "agent-llama4-maverick" ? "M4" : "L4"}
                         </div>
                         <div>
                           <div className="text-sm font-semibold" style={{ fontFamily: "Crimson Text, serif", fontSize: "16px" }}>{agent.label}</div>
