@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Scale, FileText, Zap, Shield, ArrowRight, Settings, Flame } from "lucide-react";
+import { Scale, FileText, Zap, Shield, ArrowRight, Flame } from "lucide-react";
 
 export default function HomePage() {
   const [hovered, setHovered] = useState<number | null>(null);
@@ -28,7 +28,7 @@ export default function HomePage() {
           style={{ background: "linear-gradient(to bottom, transparent, #c9a84c, transparent)" }} />
       </div>
 
-      {/* Nav */}
+      {/* Nav — sin botón de Configuración */}
       <nav className="relative z-10 flex items-center justify-between px-8 py-6 border-b border-white/5">
         <div className="flex items-center gap-3">
           <Scale className="w-6 h-6" style={{ color: "#c9a84c" }} />
@@ -37,25 +37,17 @@ export default function HomePage() {
             RecursApp
           </span>
         </div>
-        <div className="flex items-center gap-6">
-          <Link href="/settings"
-            className="flex items-center gap-2 text-sm opacity-60 hover:opacity-100 transition-opacity"
-            style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "13px" }}>
-            <Settings className="w-4 h-4" />
-            Configuración
-          </Link>
-          <Link href="/recursos"
-            className="flex items-center gap-2 px-5 py-2.5 rounded-sm text-sm font-semibold transition-all hover:scale-[1.02]"
-            style={{
-              background: "linear-gradient(135deg, #c9a84c, #9a7530)",
-              color: "#0a0a0f",
-              fontFamily: "Crimson Text, serif",
-              fontSize: "16px",
-            }}>
-            Recurrir multa
-            <ArrowRight className="w-4 h-4" />
-          </Link>
-        </div>
+        <Link href="/recursos"
+          className="flex items-center gap-2 px-5 py-2.5 rounded-sm text-sm font-semibold transition-all hover:scale-[1.02]"
+          style={{
+            background: "linear-gradient(135deg, #c9a84c, #9a7530)",
+            color: "#0a0a0f",
+            fontFamily: "Crimson Text, serif",
+            fontSize: "16px",
+          }}>
+          Recurrir multa
+          <ArrowRight className="w-4 h-4" />
+        </Link>
       </nav>
 
       {/* Hero */}
@@ -79,9 +71,8 @@ export default function HomePage() {
           </em>
         </h1>
 
-        {/* Subtitle personal */}
         <p className="text-xl max-w-2xl mx-auto mb-6 opacity-80" style={{ fontFamily: "Crimson Text, serif", lineHeight: "1.7" }}>
-          Hartos de orejazos y que nos sangren a multas, para que tengamos más para birra, os he hecho esto chavales . Sube la foto de tu multa y tres inteligencias artificiales
+          Hartos de orejazos y que nos sangren a multas, para que tengamos más para birra, os he hecho esto chavales. Sube la foto de tu multa y tres inteligencias artificiales
           te redactan el recurso administrativo en segundos.
         </p>
         <p className="text-base max-w-xl mx-auto mb-12 opacity-50" style={{ fontFamily: "Crimson Text, serif" }}>
@@ -103,9 +94,8 @@ export default function HomePage() {
           </Link>
         </div>
 
-        {/* Social proof line */}
         <p className="mt-8 text-sm opacity-30" style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "12px" }}>
-          · Mistral Pixtral · Gemini 2.0 Flash · Gemma 3 · análisis en paralelo ·
+          · Mistral Small · Llama 3.3 70B · DeepSeek V3 · análisis en paralelo ·
         </p>
       </section>
 
@@ -173,7 +163,7 @@ export default function HomePage() {
         <div className="grid md:grid-cols-3 gap-6">
           {[
             { label: "Completamente gratuito", desc: "APIs con tier gratuito. Sin suscripciones, sin pagos, sin letra pequeña.", badge: "FREE" },
-            { label: "Tres IAs, tres recursos", desc: "Mistral, Gemini y Gemma analizan la imagen de tu multa y redactan por separado. Eliges el mejor.", badge: "3× IA" },
+            { label: "Tres IAs, tres recursos", desc: "Mistral, Llama y DeepSeek analizan tu multa y redactan por separado. El maestro fusiona lo mejor.", badge: "3× IA" },
             { label: "Listo para presentar", desc: "Descarga el .docx, imprímelo o preséntalo electrónicamente. Con instrucciones incluidas.", badge: ".DOCX" },
           ].map((f, i) => (
             <div key={i} className="card-dark p-6 rounded-sm transition-all hover:border-gold"
