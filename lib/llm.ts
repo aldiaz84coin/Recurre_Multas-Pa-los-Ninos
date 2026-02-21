@@ -49,18 +49,22 @@ export const FIXED_AGENTS: {
     signupUrl: "https://openrouter.ai/keys",
     color: "#8b5cf6",
   },
-  {
-    id: "agent-openrouter-2",
-    name: "Agente DeepSeek",
-    provider: "openrouter",
+  
+
+
+{
+  id: "agent-openrouter-2",
+  name: "Agente Auto",
+  provider: "openrouter",
+  model: "openrouter/auto",          // ← usa el mejor modelo free disponible
+  label: "OpenRouter · Auto :free",
+  freeInfo: "Gratis · selección automática",
+  signupUrl: "https://openrouter.ai/keys",
+  color: "#06b6d4",
+},
+
     
-    model: "deepseek/deepseek-r1:free",
-    //model: "deepseek/deepseek-chat-v3-0324:free",
-    label: "OpenRouter · DeepSeek V3 :free",
-    freeInfo: "Gratis · sin coste · Sin tarjeta",
-    signupUrl: "https://openrouter.ai/keys",
-    color: "#06b6d4",
-  },
+  
 ];
 
 const DRAFT_PROMPT = `Eres un experto en derecho administrativo español especializado en recursos de multas y sanciones.
