@@ -53,7 +53,8 @@ export const FIXED_AGENTS: {
     id: "agent-openrouter-2",
     name: "Agente DeepSeek",
     provider: "openrouter",
-    model: "deepseek/deepseek-chat:free",
+    
+    model: "deepseek/deepseek-r1:free",
     //model: "deepseek/deepseek-chat-v3-0324:free",
     label: "OpenRouter · DeepSeek V3 :free",
     freeInfo: "Gratis · sin coste · Sin tarjeta",
